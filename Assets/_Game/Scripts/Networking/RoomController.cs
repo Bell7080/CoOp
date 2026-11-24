@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
+using CoOpHorror.Localization;
 using Unity.Netcode;
 using UnityEngine;
 
@@ -12,7 +13,7 @@ namespace CoOpHorror.Networking
     {
         public static RoomController Instance { get; private set; }
         public event Action Changed;
-        public string Status { get; private set; } = "Create a room or enter your friend's room code.";
+        public string Status { get; private set; } = GameText.Get("status.idle");
         public bool Busy { get; private set; }
         public string JoinCode => gateway?.JoinCode ?? string.Empty;
         public bool Connected => manager != null && manager.IsConnectedClient;
@@ -30,6 +31,7 @@ namespace CoOpHorror.Networking
             manager = GetComponent<NetworkManager>();
             gateway = new RelayRoomGateway();
             manager.NetworkConfig.ConnectionData = Encoding.UTF8.GetBytes(Application.version);
+            manager.NetworkConfig.ProtocolVersion = RoomLimits.ProtocolVersion;
             manager.ConnectionApprovalCallback = Approve;
             manager.OnClientConnectedCallback += OnConnected;
             manager.OnClientDisconnectCallback += OnDisconnected;
@@ -44,26 +46,45 @@ namespace CoOpHorror.Networking
             response.Approved = sameBuild && slot >= 0;
             response.CreatePlayerObject = response.Approved;
             response.Pending = false;
-            response.Reason = !sameBuild ? "Different game build. Both developers must use the same Git commit/build." : "Room is full (6 players).";
+            response.Reason = !sameBuild ? GameText.Get("error.differentBuild") : GameText.Format("error.roomFull", RoomLimits.MaxPlayers);
             if (!response.Approved) return;
             slots[request.ClientNetworkId] = slot;
-            response.Position = new Vector3((slot % 3 - 1) * 3f, 1.05f, (slot / 3) * 3f);
+            response.Position = SlotPosition(slot);
             response.Rotation = Quaternion.identity;
+        }
+
+        public static Vector3 SlotPosition(int slot) => new((slot % 3 - 1) * 3f, 1.05f, (slot / 3) * 3f);
+
+        // Server: spawn slot farthest from every other player.
+        public static Vector3 PickRespawnPosition(Transform respawning)
+        {
+            var others = FindObjectsByType<ConnectionAvatar>(FindObjectsSortMode.None);
+            var best = SlotPosition(0);
+            var bestScore = float.MinValue;
+            for (var i = 0; i < RoomLimits.MaxPlayers; i++)
+            {
+                var candidate = SlotPosition(i);
+                var nearest = float.MaxValue;
+                foreach (var other in others)
+                    if (other.transform != respawning) nearest = Mathf.Min(nearest, (other.transform.position - candidate).sqrMagnitude);
+                if (nearest > bestScore) { bestScore = nearest; best = candidate; }
+            }
+            return best;
         }
 
         public Task HostAsync() => RunAsync(async () =>
         {
-            Status = "Creating internet room...";
+            Status = GameText.Get("status.creating");
             slots.Clear();
             await gateway.HostAsync();
-            Status = "Hosting on this PC. Share the room code with your friend.";
+            Status = GameText.Get("status.hosting");
         });
 
         public Task JoinAsync(string code) => RunAsync(async () =>
         {
-            Status = "Joining internet room...";
+            Status = GameText.Get("status.joining");
             await gateway.JoinAsync(code);
-            Status = "Connected to your friend's PC through Relay.";
+            Status = GameText.Get("status.joined");
         });
 
         public Task LeaveAsync() => RunAsync(async () =>
@@ -75,19 +96,19 @@ namespace CoOpHorror.Networking
                 if (manager.IsListening) manager.Shutdown();
                 slots.Clear();
                 leaving = false;
-                Status = "Disconnected. Create or join another room.";
+                Status = GameText.Get("status.left");
             }
         });
 
         private async Task RunAsync(Func<Task> operation)
         {
-            if (Busy) throw new InvalidOperationException("A room operation is already in progress.");
+            if (Busy) throw new InvalidOperationException(GameText.Get("error.busy"));
             Busy = true;
             Changed?.Invoke();
             try { await operation(); }
             catch (Exception error)
             {
-                Status = error.Message;
+                Status = GameText.Format("status.error", error.Message);
                 if (!gateway.HasRoom && manager.IsListening) manager.Shutdown();
                 throw;
             }
@@ -102,8 +123,8 @@ namespace CoOpHorror.Networking
             if (id == manager.LocalClientId && !leaving && !Busy)
             {
                 try { await LeaveAsync(); }
-                catch (Exception error) { Status = "Disconnected: " + error.Message; }
-                Status = "Connection closed. The host may have left. Create or join again.";
+                catch (Exception error) { Status = GameText.Format("status.disconnectError", error.Message); }
+                Status = GameText.Get("status.closed");
             }
             Changed?.Invoke();
         }

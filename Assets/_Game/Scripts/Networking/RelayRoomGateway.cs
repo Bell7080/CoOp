@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using CoOpHorror.Localization;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
 using Unity.Services.Multiplayer;
@@ -29,7 +30,7 @@ namespace CoOpHorror.Networking
 
         public async Task HostAsync()
         {
-            if (HasRoom) throw new InvalidOperationException("Leave the current room first.");
+            if (HasRoom) throw new InvalidOperationException(GameText.Get("error.leaveFirst"));
             await InitializeAsync();
             var options = new SessionOptions
             {
@@ -44,8 +45,8 @@ namespace CoOpHorror.Networking
 
         public async Task JoinAsync(string code)
         {
-            if (HasRoom) throw new InvalidOperationException("Leave the current room first.");
-            if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException("Enter a room code.");
+            if (HasRoom) throw new InvalidOperationException(GameText.Get("error.leaveFirst"));
+            if (string.IsNullOrWhiteSpace(code)) throw new ArgumentException(GameText.Get("error.enterCode"));
             await InitializeAsync();
             session = await MultiplayerService.Instance.JoinSessionByCodeAsync(code.Trim().ToUpperInvariant());
         }

@@ -50,17 +50,23 @@ com.unity.transport version: "2.7.4"
 | `RelayRoomGateway` | 익명 플레이어 초기화, 코드 참가, Relay 구성, 방장 Delete/참가자 Leave. |
 | `RoomController` | 작업 중복 방지, 접속 승인, 서버 슬롯/스폰 위치 지정, 연결 종료 UI 상태. |
 | `ConnectionAvatar` | 서버만 쓰는 `ConfirmedSignals` 상태와 소유자만 호출하는 신호 RPC. |
-| `SandboxAvatarMotor` | 소유자 즉시 이동, Owner 권한 NetworkTransform 동기화. 최종 게임 모터가 아니다. |
-| `DevelopmentRoomPanel` | 방 코드 UI, 상태·인원·게임 버전 표시. |
+| `FirstPersonController` | (0.2.0, `SandboxAvatarMotor` 대체) CharacterController 1인칭 이동·마우스 시점·Shift 달리기·점프·중력. 소유자 즉시 이동 + Owner 권한 NetworkTransform(위치·Y 회전). 소유자 쓰기 `Pitch` NetworkVariable로 다른 플레이어에게 위아래 시선 표시. 커서 잠금/Esc 해제, 소유자에게만 메인 카메라 부착. 서버 RPC로 받은 넉백·부활 순간이동 적용. |
+| `PlayerCombat` | 소유자 좌/우클릭 → `PunchRpc(손, 조준 방향)` 요청. **서버**가 손별 쿨다운(클라 0.4초, 서버 허용 0.3초), 몸 방향 기준 조준 제한(89°), 머리 위치에서 반경 0.3m·거리 2.2m SphereCast, 자기 자신·사망자 제외를 검증한 뒤 피해 적용. 펀치 연출은 `NotOwner` RPC, 적중 표시는 공격자 `Owner` RPC. |
+| `PlayerHealth` | 서버만 쓰는 `Health`(100)·`IsDead`. 서버가 피해(10~15), 피해자 소유자에게 넉백 RPC, 0이면 사망 → 3초 뒤 가장 먼 스폰 슬롯으로 소유자 대상 순간이동 RPC → 체력 100 복구. 바닥 아래(-20m)로 떨어지면 서버가 사망 처리. |
+| `PlayerAvatarVisual` | 캡슐 몸·머리·양 주먹 표시, 펀치 잽 애니메이션, 피격 빨간 깜빡임, 사망 시 숨김. 소유자는 몸/머리를 그림자만 남기고 주먹만 본다. 게임 상태를 쓰지 않는다. |
+| `CombatHud` | 실행 시 생성하는 십자선·적중 표시·내 체력·피격 화면 붉은 효과·조작 안내·전체 체력 목록. |
+| `GameText` | 한국어 기본 문구 표. [LOCALIZATION.md](LOCALIZATION.md). |
+| `DevelopmentRoomPanel` | 방 코드 UI, 상태·인원·체력·게임 버전 표시. 커서가 잠긴 접속 중에는 숨고 Esc로 다시 표시. |
 
 Steam 구현 시에는 `IRoomGateway` 구현만 만드는 것으로 끝나지 않는다. 사용할 NGO 전송 계층과 Steam SDK 래퍼의 버전·API를 검증하고, SteamID ↔ NGO client ID를 매핑하고, 초대·로비 수명·네트워크 시작을 연결해야 한다. 게임 상태용 NetworkBehaviour는 가능한 한 유지한다. Steam과 Relay의 시작 경로를 동시에 실행하지 않는다.
 
 ## 권한과 상태
 
-- `RoomLimits.MaxPlayers = 6`, `RecommendedPlayers = 2`, `TickRate = 30`, `ProtocolVersion = 1`.
+- `RoomLimits.MaxPlayers = 6`, `RecommendedPlayers = 2`, `TickRate = 30`, `ProtocolVersion = 2`(0.2.0에서 플레이어 프리팹·RPC 변경으로 올림). `RoomController`가 실행 시 이 값을 NetworkConfig에 적용한다.
 - `SessionOptions.MaxPlayers`와 서버 승인 슬롯 모두 6인 상한을 적용한다.
 - 서버가 빈 슬롯을 선택하고 스폰 위치를 정한다. 클라이언트가 슬롯을 임의 지정하지 않는다.
 - 신호는 요청 RPC → 서버 속도 제한 → 서버 `NetworkVariable` 변경 → 모든 참가자 수신이다.
+- 펀치 대전: 클라이언트는 "이 손으로 이 방향을 때리겠다"만 요청한다. 쿨다운·조준 제한·적중 판정·피해·사망·부활 위치는 방장이 결정한다. 넉백/부활 순간이동은 이동 권한이 소유자에게 있으므로 방장이 해당 소유자에게 RPC로 지시한다. 방장 쪽 원격 플레이어 위치는 보간된 값이라 지연이 크면 화면과 판정이 어긋날 수 있다(지연 보상/되감기 없음).
 - 샌드박스 이동은 Owner 권한이다. 방장 게임 규칙 검증/이동 치트 방지를 완성한 구조는 아니다. 실제 아이템·문·적·피해·보상은 클라이언트 요청을 방장이 검증하도록 추가한다.
 - 접속 승인은 `Application.version`, NGO 프로토콜, 프리팹 일치를 확인한다. 모든 소스 차이를 해시로 비교하는 것은 아니므로 팀은 같은 커밋으로 테스트한다.
 - 음성은 [VOICE.md](VOICE.md) 설계에 따라 별도 전송/청취 정책으로 추가한다.
@@ -94,6 +100,21 @@ client remains connected; server/client ConfirmedSignals both 2
 
 현재 조합에는 일부 문서의 `netcode.gameobjects` / `simulator` CLI 그룹이 없어 동일 상태를 설치된 공개 NGO/Multiplayer Tools API의 `script eval`로 확인했다. 에디터 복제본은 별도 프로세스이며, 프로젝트 수정은 메인 에디터에서만 했다. 상세한 실패 시도와 조정도 [개발 로그](Devlog/2026-11-24-v0.1.0.md)에 기록했다.
 
+## 검증된 범위 — 0.2.0 펀치 대전
+
+동일 PC의 메인 에디터(방장)와 별도 MPPM 프로세스(참가자)가 Relay를 경유했다. 두 물리 PC 간 검증은 아직 없다.
+
+```text
+both: ver 0.2.0, protocol 2; client spawn slot 1 (0, 1.04, 0)
+client walk/run 4.02 / 6.91 m per s, jump +1.09 m -> host sees same final pos, remote y 1.04..2.04
+host walk/run/jump -> client sees same final pos, remote y 1.04..2.03; client pitch -30 -> host pitchNV -30
+client -> host punches: 100,85,70,60,45,30,15,2,0 -> dead -> ~3 s -> hp 100 at farthest slot (-3, 1.04, 3)
+host -> client punches: 100,90,79,67 (same on both screens)
+client leave -> camera restored; rejoin id 2 receives host hp 85; host leave -> client disconnected notice
+```
+
+펀치·이동 입력은 같은 코드 경로를 호출하는 자동화(`PlayerCombat.TryPunch`, `FirstPersonController.AutomationMove/RequestJump`)로 넣었다. 실제 마우스 좌/우클릭·Esc 커서 전환은 사람이 두 화면에서 직접 확인해야 한다. 상세: [0.2.0 개발 로그](Devlog/2026-11-24-v0.2.0.md).
+
 ## 다음 실제 두 PC 검사
 
-같은 커밋/빌드로 서로 번갈아 방장을 맡는다. 생성→코드 참가→양방향 이동→신호→퇴장/재참가→방장 종료를 확인한다. 이후 6인, 지연·손실, 서로 다른 버전 거절, 공유기/회사 네트워크, 장시간 실행을 검사한다. 마이크는 실제 장치로 별도 검사한다.
+같은 커밋/빌드로 서로 번갈아 방장을 맡는다. 생성→코드 참가→양방향 이동·점프→서로 펀치(좌/우클릭)·사망·부활→신호→퇴장/재참가→방장 종료를 확인한다. 이후 6인, 지연·손실, 서로 다른 버전 거절, 공유기/회사 네트워크, 장시간 실행을 검사한다. 마이크는 실제 장치로 별도 검사한다.

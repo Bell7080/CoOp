@@ -1,10 +1,11 @@
 # CoOpHorror / CoOp
 
-Read README.md and Docs/NETWORKING.md before changing the game.
+Read README.md, Docs/NETWORKING.md and Docs/LOCALIZATION.md before changing the game.
 
 - Editor is Unity 6000.3.29f1 LTS. Keep URP and the committed package lock.
 - Target: Windows desktop, recommended 2 players, maximum 6, player-hosted cooperative horror.
 - Development connectivity is Unity Multiplayer Services + Relay. Steam lobby/transport is a later provider. Do not replace NGO or mix in another gameplay networking stack without explaining the migration.
+- Base game language is Korean (ko-KR); English, Simplified Chinese and Japanese come later. Never hard-code player-facing strings: add a key to `GameText` and follow Docs/LOCALIZATION.md.
 - Use Unity CLI and the installed Unity skills. Prefer the running Editor to editing scene/prefab YAML. Run tools/unity.ps1 from PowerShell to pin commands to this checkout.
 - One checkout, branch and Editor per developer/agent. Do not drive another checkout's Editor. Explicitly pass --project-path when bypassing the wrapper.
 - Keep networking, session discovery, voice transport and voice audibility separate. Never send microphone PCM using gameplay RPCs.

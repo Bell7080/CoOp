@@ -11,7 +11,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $versionFile = Join-Path $root 'VERSION'
 $changelogFile = Join-Path $root 'CHANGELOG.md'
 $readmeFile = Join-Path $root 'README.md'
-$old = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+$old = (Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8).Trim()
 if ($old -notmatch '^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
     throw "Pre-release versions must be 0.minor.patch; found '$old'. 1.0.0 is reserved for an explicitly approved public release."
 }
@@ -24,8 +24,8 @@ $date = [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $seoul).ToString(
 $devlogDir = Join-Path $root 'Docs/Devlog'
 $devlogFile = Join-Path $devlogDir "$date-v$next.md"
 if (Test-Path -LiteralPath $devlogFile) { throw "Devlog already exists: $devlogFile" }
-$changelog = Get-Content -LiteralPath $changelogFile -Raw
-$readme = Get-Content -LiteralPath $readmeFile -Raw
+$changelog = Get-Content -LiteralPath $changelogFile -Raw -Encoding UTF8
+$readme = Get-Content -LiteralPath $readmeFile -Raw -Encoding UTF8
 if (-not $readme.Contains("**현재 게임 버전: $old**")) { throw 'README.md and VERSION must show the same current version.' }
 if ($changelog -notmatch '(?m)^# Changelog\r?$' -or $changelog -notmatch ('(?m)^## \[' + [regex]::Escape($old) + '\]')) {
     throw 'VERSION and CHANGELOG.md must agree before creating an update.'

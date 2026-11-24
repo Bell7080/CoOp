@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using CoOpHorror.Networking;
+using CoOpHorror.Player;
 using CoOpHorror.UI;
 using Unity.Netcode;
 using Unity.Netcode.Components;
@@ -41,8 +42,8 @@ namespace CoOpHorror.Editor
             transformSync.SyncScaleX = transformSync.SyncScaleY = transformSync.SyncScaleZ = false;
             transformSync.SyncRotAngleX = transformSync.SyncRotAngleZ = false;
             avatar.AddComponent<ConnectionAvatar>();
-            avatar.AddComponent<SandboxAvatarMotor>();
             avatar.GetComponent<Renderer>().sharedMaterial = material;
+            ConfigureFirstPersonPlayer(avatar, material);
             var playerPrefab = PrefabUtility.SaveAsPrefabAsset(avatar, PrefabPath);
             UnityEngine.Object.DestroyImmediate(avatar);
 
@@ -84,6 +85,7 @@ namespace CoOpHorror.Editor
             };
             networkRoot.AddComponent<RoomController>();
             CreatePanel();
+            new GameObject("CombatHud", typeof(CombatHud));
             var events = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
             events.GetComponent<InputSystemUIInputModule>().AssignDefaultActions();
             PlayerSettings.productName = "CoOpHorror";
@@ -95,6 +97,104 @@ namespace CoOpHorror.Editor
             EditorSceneManager.SaveScene(scene, ScenePath);
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             AssetDatabase.SaveAssets();
+        }
+
+        // v0.2.0: first-person fighting player. Idempotent; run from the Editor, not by YAML edits.
+        [MenuItem("CoOp/Setup/Upgrade to first-person fighting (v0.2)")]
+        public static void UpgradeToFirstPerson()
+        {
+            var root = PrefabUtility.LoadPrefabContents(PrefabPath);
+            try
+            {
+                var material = AssetDatabase.LoadAssetAtPath<Material>("Assets/_Game/Materials/DeveloperAvatar.mat");
+                ConfigureFirstPersonPlayer(root, material);
+                PrefabUtility.SaveAsPrefabAsset(root, PrefabPath);
+            }
+            finally { PrefabUtility.UnloadPrefabContents(root); }
+
+            var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            var manager = UnityEngine.Object.FindFirstObjectByType<NetworkManager>();
+            if (manager != null)
+            {
+                manager.NetworkConfig.ProtocolVersion = RoomLimits.ProtocolVersion;
+                EditorUtility.SetDirty(manager);
+            }
+            if (UnityEngine.Object.FindFirstObjectByType<CombatHud>() == null) new GameObject("CombatHud", typeof(CombatHud));
+            var panel = UnityEngine.Object.FindFirstObjectByType<DevelopmentRoomPanel>();
+            if (panel != null)
+            {
+                if (panel.TitleText == null) panel.TitleText = panel.transform.GetChild(0).GetComponent<Text>();
+                if (panel.HintText == null) panel.HintText = panel.transform.GetChild(1).GetComponent<Text>();
+                EditorUtility.SetDirty(panel);
+            }
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            AssetDatabase.SaveAssets();
+        }
+
+        private static void ConfigureFirstPersonPlayer(GameObject root, Material material)
+        {
+            foreach (var old in root.GetComponents<MonoBehaviour>())
+                if (old != null && old.GetType().Name == "SandboxAvatarMotor") UnityEngine.Object.DestroyImmediate(old, true);
+            var capsule = root.GetComponent<CapsuleCollider>();
+            if (capsule != null) UnityEngine.Object.DestroyImmediate(capsule, true);
+            var controller = Ensure<CharacterController>(root);
+            controller.height = 2f;
+            controller.radius = 0.45f;
+            controller.center = Vector3.zero;
+            controller.stepOffset = 0.3f;
+            controller.skinWidth = 0.04f;
+            controller.slopeLimit = 50f;
+
+            // Root keeps no mesh so the visible body can be shorter than the 2 m CharacterController.
+            var rootRenderer = root.GetComponent<MeshRenderer>();
+            if (rootRenderer != null) UnityEngine.Object.DestroyImmediate(rootRenderer, true);
+            var rootFilter = root.GetComponent<MeshFilter>();
+            if (rootFilter != null) UnityEngine.Object.DestroyImmediate(rootFilter, true);
+            var body = Child(root.transform, "Body", PrimitiveType.Capsule, new Vector3(0, -0.27f, 0), new Vector3(0.85f, 0.73f, 0.85f), material);
+            var head = Child(root.transform, "Head", PrimitiveType.Sphere, new Vector3(0, 0.74f, 0), Vector3.one * 0.5f, material);
+            var pivot = root.transform.Find("AimPivot");
+            if (pivot == null)
+            {
+                pivot = new GameObject("AimPivot").transform;
+                pivot.SetParent(root.transform, false);
+            }
+            pivot.localPosition = new Vector3(0, 0.72f, 0);
+            pivot.localRotation = Quaternion.identity;
+            var left = Child(pivot, "LeftFist", PrimitiveType.Sphere, new Vector3(-0.32f, -0.3f, 0.5f), Vector3.one * 0.17f, material);
+            var right = Child(pivot, "RightFist", PrimitiveType.Sphere, new Vector3(0.32f, -0.3f, 0.5f), Vector3.one * 0.17f, material);
+
+            var visual = Ensure<PlayerAvatarVisual>(root);
+            visual.Body = body.GetComponent<Renderer>();
+            visual.Head = head.GetComponent<Renderer>();
+            visual.AimPivot = pivot;
+            visual.LeftFist = left;
+            visual.RightFist = right;
+            Ensure<PlayerHealth>(root);
+            var motor = Ensure<FirstPersonController>(root);
+            motor.AimPivot = pivot;
+            Ensure<PlayerCombat>(root);
+        }
+
+        private static T Ensure<T>(GameObject go) where T : Component
+        {
+            var existing = go.GetComponent<T>();
+            return existing != null ? existing : go.AddComponent<T>();
+        }
+
+        private static Transform Child(Transform parent, string name, PrimitiveType shape, Vector3 position, Vector3 scale, Material material)
+        {
+            var existing = parent.Find(name);
+            var go = existing != null ? existing.gameObject : GameObject.CreatePrimitive(shape);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = position;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = scale;
+            var collider = go.GetComponent<Collider>();
+            if (collider != null) UnityEngine.Object.DestroyImmediate(collider, true);
+            if (material != null) go.GetComponent<Renderer>().sharedMaterial = material;
+            return go.transform;
         }
 
         private static void CreatePanel()
@@ -114,8 +214,8 @@ namespace CoOpHorror.Editor
             rect.sizeDelta = new Vector2(470, 660);
             panel.GetComponent<UnityEngine.UI.Image>().color = new Color(0.02f, 0.035f, 0.05f, 0.96f);
             var ui = panel.GetComponent<DevelopmentRoomPanel>();
-            Label(panel.transform, "COOP / NETWORK SANDBOX", 22, 22, 25);
-            Label(panel.transform, "WASD: move | E: send sync signal", 22, 58, 16);
+            ui.TitleText = Label(panel.transform, "COOP / NETWORK SANDBOX", 22, 22, 25);
+            ui.HintText = Label(panel.transform, "Room hint", 22, 58, 14);
             ui.HostButton = Button(panel.transform, "CREATE INTERNET ROOM", 22, 100, 426);
             ui.CodeInput = Input(panel.transform, 22, 160, 268);
             ui.JoinButton = Button(panel.transform, "JOIN", 304, 160, 144);

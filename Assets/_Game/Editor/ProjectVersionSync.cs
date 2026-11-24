@@ -27,6 +27,8 @@ namespace CoOpHorror.Editor
         public static void Apply()
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode) return;
+            // MPPM clone players run from Library/VP without a VERSION file; only the main project applies it.
+            if (!File.Exists(Path.GetFullPath(Path.Combine(Application.dataPath, "..", "VERSION")))) return;
             if (PlayerSettings.bundleVersion != Current) PlayerSettings.bundleVersion = Current;
         }
 

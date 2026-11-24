@@ -1217,6 +1217,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7d70b17b98e1d9245bfbc715c1be2c3a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.UI.DevelopmentRoomPanel
+  TitleText: {fileID: 1355612552}
+  HintText: {fileID: 881117557}
   StatusText: {fileID: 1060865801}
   RoomText: {fileID: 1282830661}
   PlayersText: {fileID: 512676982}
@@ -1523,7 +1525,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Netcode.Runtime::Unity.Netcode.NetworkManager
   NetworkManagerExpanded: 0
   NetworkConfig:
-    ProtocolVersion: 1
+    ProtocolVersion: 2
     NetworkTransport: {fileID: 1099674241}
     PlayerPrefab: {fileID: 8627508373892010549, guid: faa3c415af2cb0941a70daff5a1cf4e8, type: 3}
     Prefabs:
@@ -2542,6 +2544,50 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1661221340}
   m_CullTransparentMesh: 1
+--- !u!1 &1690075828
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1690075830}
+  - component: {fileID: 1690075829}
+  m_Layer: 0
+  m_Name: CombatHud
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1690075829
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1690075828}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 35301db7455a6fb4bbc6508db67d3d52, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.UI.CombatHud
+--- !u!4 &1690075830
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1690075828}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1798299312
 GameObject:
   m_ObjectHideFlags: 0
@@ -3310,3 +3356,4 @@ SceneRoots:
   - {fileID: 1099674242}
   - {fileID: 506983530}
   - {fileID: 1570739271}
+  - {fileID: 1690075830}

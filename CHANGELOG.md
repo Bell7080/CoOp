@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.2.0] - 2026-11-24
+
+1인칭 시점과 간단한 캐릭터로 멀티 테스트에서 서로 펀치로 싸울 수 있게 했다. 게임 기본 언어를 한국어로 정하고 문구 키 표를 도입했다.
+
+### 변경
+
+- 게임 기본 언어 한국어(ko-KR) 명시. 영어·중국어 간체·일본어 추가 예정. Docs/LOCALIZATION.md, README 언어 섹션, AGENTS.md 규칙 추가.
+- GameText 키 기반 문구 표(언어 열거형, 한국어 기본값, OS 한글 글꼴). 방 패널·방 상태·오류·HUD 문구를 모두 한국어로 전환.
+- SandboxAvatarMotor를 FirstPersonController로 교체: CharacterController, 마우스 시점(상하 ±85°), WASD 4m/s, Shift 7m/s, Space 점프·중력. Owner 권한 NetworkTransform 유지, 소유자 쓰기 Pitch NetworkVariable.
+- 로컬 플레이어에게 메인 카메라를 머리 높이에 부착, 자기 몸/머리는 그림자만 표시. 커서 잠금, Esc로 해제 후 방 패널 사용, 게임 화면 클릭으로 복귀, 방 코드 입력 중 조작 무시. E 신호 유지.
+- 간단한 캐릭터: 캡슐 몸·머리·양 주먹, 모든 화면에 보이는 펀치 잽 애니메이션과 피격 붉은 깜빡임.
+- 호스트 권한 전투: PlayerHealth(서버 기록 체력 100), PlayerCombat(좌클릭 왼주먹/우클릭 오른주먹, 0.4초 쿨다운, 서버에서 쿨다운·조준 제한·2.2m SphereCast 검증, 10~15 피해, 피해자 소유자에게 넉백), 체력 0이면 3초 뒤 가장 먼 스폰 위치에서 부활, 낙하 시 사망 처리.
+- HUD: 십자선, 적중 표시, 내 체력, 피격 화면 효과, 한국어 조작 안내, 전체 플레이어 체력 목록. 접속 중 커서가 잠기면 방 패널 숨김.
+- RoomLimits.ProtocolVersion 1 → 2(실행 시 NetworkConfig에 적용). 플레이어 프리팹과 씬은 에디터 메뉴 CoOp/Setup/Upgrade to first-person fighting (v0.2)로 갱신.
+- 도구 수정: update-version.ps1이 Windows PowerShell 5.1에서도 UTF-8로 읽도록 수정, MPPM 복제 플레이어에서 VERSION 파일이 없을 때 ProjectVersionSync 예외가 나지 않도록 수정.
+
+### 검증
+
+- 메인 에디터 재컴파일 오류 0개.
+- 동일 PC 메인 에디터(방장) + MPPM 가상 플레이어(별도 프로세스)로 Relay 방 생성·코드 참가 성공, 양쪽 ProtocolVersion 2.
+- 방장·참가자 양쪽 Application.version 0.2.0, PlayerSettings.bundleVersion 0.2.0. 이동·점프·시점 동기화, 양방향 펀치 피해, 사망→3초 뒤 부활, 퇴장/재참가/방장 종료 확인(상세 수치는 개발 로그).
+
+### 남은 항목
+
+- 두 대의 실제 PC(서로 다른 네트워크)에서는 아직 테스트하지 않았다.
+- 실제 마우스 클릭으로 펀치하는 경로는 첫 테스트 중 방장 에디터에서 누군가 직접 조작한 입력으로만 관찰됐다(좌/우 구분은 확인 못 함). 나머지 펀치·이동·점프는 같은 코드 경로를 부르는 자동화 호출(PlayerCombat.TryPunch, FirstPersonController.AutomationMove/RequestJump)로 검증했다. 사람이 두 화면에서 직접 좌/우클릭·WASD·Esc/재클릭을 해 보는 확인이 필요하다.
+- 지연 보상 없음: 지연이 크면 화면상 맞은 것 같아도 방장 판정에서 빗나갈 수 있다. 이동은 Owner 권한이라 치트 방지가 아니다.
+- 영어·중국어·일본어 표, 언어 선택 UI, 출시용 CJK 글꼴 에셋은 아직 없다.
+- Windows 개발 빌드는 이번 버전에서 다시 만들지 않았다.
+
+[개발 로그](Docs/Devlog/2026-11-24-v0.2.0.md)
+
 ## [0.1.0] - 2026-11-24
 
 2~6인 협동 공포 게임의 Unity·AI·협업·리슨 서버 개발 환경을 처음 구성했다.
