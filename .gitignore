@@ -136,3 +136,11 @@ crashlytics-build.properties
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+# Local AI sessions, credentials and tooling caches
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+.codex/
+.ai-scratch/
+TestResults/
