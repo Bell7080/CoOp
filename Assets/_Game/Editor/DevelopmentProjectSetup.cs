@@ -173,7 +173,9 @@ namespace CoOpHorror.Editor
             Ensure<PlayerHealth>(root);
             var motor = Ensure<FirstPersonController>(root);
             motor.AimPivot = pivot;
-            Ensure<PlayerCombat>(root);
+            Ensure<PlayerInteractor>(root); // v0.3 ElecMole prototype: left-click/Q interaction, skill checks
+            Ensure<PlayerFlashlight>(root);
+            Ensure<PlayerCorpse>(root);
         }
 
         private static T Ensure<T>(GameObject go) where T : Component

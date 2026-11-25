@@ -7,18 +7,16 @@ using UnityEngine.UI;
 
 namespace CoOpHorror.UI
 {
-    // Runtime-built HUD: crosshair, hit marker, own health, damage flash, controls hint and scoreboard.
+    // Runtime-built HUD: crosshair, own health (when no stage HUD shows it), damage flash, controls hint and scoreboard.
     public sealed class CombatHud : MonoBehaviour
     {
         private Canvas canvas;
         private Image flash;
-        private Text hitMarker;
         private Text healthText;
         private Text hintText;
         private Text centerText;
         private Text scoreText;
         private PlayerHealth bound;
-        private float hitMarkerUntil;
         private float flashAlpha;
         private float nextScore;
 
@@ -37,14 +35,11 @@ namespace CoOpHorror.UI
             flash = MakeImage("DamageFlash", new Color(0.8f, 0f, 0f, 0f), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             MakeImage("CrosshairH", new Color(1, 1, 1, 0.85f), Center, Center, Vector2.zero, new Vector2(18, 2));
             MakeImage("CrosshairV", new Color(1, 1, 1, 0.85f), Center, Center, Vector2.zero, new Vector2(2, 18));
-            hitMarker = MakeText("HitMarker", "×", 46, TextAnchor.MiddleCenter, Center, Center, new Vector2(0, 2), new Vector2(80, 80));
-            hitMarker.color = new Color(1f, 0.25f, 0.2f, 0f);
             healthText = MakeText("Health", "", 30, TextAnchor.LowerLeft, Vector2.zero, Vector2.zero, new Vector2(28, 64), new Vector2(500, 50));
             hintText = MakeText("Controls", GameText.Get("hud.controls"), 17, TextAnchor.LowerCenter, new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(0, 18), new Vector2(1100, 30));
             hintText.color = new Color(0.85f, 0.92f, 0.95f, 0.8f);
             centerText = MakeText("CenterMessage", "", 26, TextAnchor.MiddleCenter, Center, Center, new Vector2(0, -120), new Vector2(1000, 60));
             scoreText = MakeText("Scoreboard", "", 18, TextAnchor.UpperRight, Vector2.one, Vector2.one, new Vector2(-24, -20), new Vector2(420, 240));
-            PlayerCombat.LocalHitConfirmed += OnHitConfirmed;
             canvas.enabled = false;
         }
 
@@ -52,11 +47,8 @@ namespace CoOpHorror.UI
 
         private void OnDestroy()
         {
-            PlayerCombat.LocalHitConfirmed -= OnHitConfirmed;
             Bind(null);
         }
-
-        private void OnHitConfirmed() => hitMarkerUntil = Time.unscaledTime + 0.25f;
 
         private void OnHealthChanged(int previous, int current)
         {
@@ -74,15 +66,14 @@ namespace CoOpHorror.UI
         private void Update()
         {
             Bind(PlayerHealth.Local);
-            canvas.enabled = bound != null;
+            canvas.enabled = bound != null && !FirstPersonController.ViewLocked;
             if (bound == null) return;
 
+            healthText.enabled = !PrototypeHud.Visible;
             healthText.text = GameText.Format("hud.health", bound.Health.Value, PlayerHealth.MaxHealth);
             healthText.color = bound.Health.Value > 30 ? new Color(0.9f, 0.96f, 0.95f) : new Color(1f, 0.4f, 0.35f);
-            centerText.text = bound.IsDead.Value ? GameText.Get("hud.dead") : FirstPersonController.CursorCaptured ? "" : GameText.Get("hud.cursorFree");
+            centerText.text = bound.IsDead.Value ? GameText.Get(PlayerHealth.AutoRespawn ? "hud.dead" : "hud.discharged") : FirstPersonController.CursorCaptured ? "" : GameText.Get("hud.cursorFree");
 
-            var remaining = hitMarkerUntil - Time.unscaledTime;
-            hitMarker.color = new Color(1f, 0.25f, 0.2f, Mathf.Clamp01(remaining / 0.25f));
             flashAlpha = Mathf.MoveTowards(flashAlpha, 0f, Time.unscaledDeltaTime * 1.6f);
             flash.color = new Color(0.8f, 0f, 0f, flashAlpha);
 

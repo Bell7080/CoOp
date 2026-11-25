@@ -18,16 +18,26 @@ namespace CoOpHorror.Player
         public const float Gravity = -20f;
         public const float MaxPitch = 85f;
         public const float LookSensitivity = 0.08f;
+        public const float StaminaDrain = 0.2f;     // per second while running (5 s from full)
+        public const float StaminaRegen = 0.16f;    // per second after the delay
+        public const float StaminaRegenDelay = 0.8f;
+        public const float StaminaResume = 0.3f;    // after running dry, wait until this much is back
 
         public Transform AimPivot;
+
+        // Owner-local stamina 0..1 (presentation and movement only; not replicated).
+        public float Stamina { get; private set; } = 1f;
+        public bool Exhausted { get; private set; }
 
         // Owner-written so remote players see roughly where the attacker is looking.
         public readonly NetworkVariable<float> Pitch = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
 
         public static FirstPersonController Local { get; private set; }
         public static bool CursorCaptured { get; private set; }
+        // A full-screen view (CCTV) owns the mouse and keys: no walking, looking or interacting.
+        public static bool ViewLocked { get; set; }
         // True when gameplay mouse buttons belong to the game (not the frame that re-captured the cursor).
-        public static bool GameplayInputReady => CursorCaptured && Time.frameCount != captureFrame && !IsTyping();
+        public static bool GameplayInputReady => CursorCaptured && !ViewLocked && Time.frameCount != captureFrame && !IsTyping();
 
         private static int captureFrame = -1;
         private static float captureTime = -10f;
@@ -38,7 +48,10 @@ namespace CoOpHorror.Player
 
         private CharacterController controller;
         private PlayerHealth health;
+        private PlayerInteractor interactor;
         private ConnectionAvatar signal;
+        private Vector3 pivotHome;
+        private float staminaRestAt;
         private float verticalVelocity;
         private Vector3 impulse;
         private float pitch;
@@ -55,8 +68,10 @@ namespace CoOpHorror.Player
         {
             controller = GetComponent<CharacterController>();
             health = GetComponent<PlayerHealth>();
+            interactor = GetComponent<PlayerInteractor>();
             signal = GetComponent<ConnectionAvatar>();
             if (AimPivot == null) AimPivot = transform.Find("AimPivot");
+            if (AimPivot != null) pivotHome = AimPivot.localPosition;
         }
 
         public override void OnNetworkSpawn()
@@ -81,6 +96,7 @@ namespace CoOpHorror.Player
             if (Local == this)
             {
                 Local = null;
+                ViewLocked = false;
                 SetCaptured(false);
             }
         }
@@ -108,8 +124,12 @@ namespace CoOpHorror.Player
             var k = Keyboard.current;
             var dt = Mathf.Clamp(Time.deltaTime, 0f, 0.05f);
 
+            // A discharged body sees from the floor.
+            if (AimPivot != null)
+                AimPivot.localPosition = Vector3.MoveTowards(AimPivot.localPosition, alive ? pivotHome : new Vector3(0f, -0.7f, 0.9f), 3f * dt);
+
             // Locking the cursor produces one large delta; ignore the first frames after capture.
-            if (CursorCaptured && alive && Mouse.current != null && Time.frameCount > captureFrame + 2 && Time.unscaledTime > captureTime + 0.2f)
+            if (CursorCaptured && alive && !ViewLocked && Mouse.current != null && Time.frameCount > captureFrame + 2 && Time.unscaledTime > captureTime + 0.2f)
             {
                 // Clamp per-frame jumps (cursor warp on lock/focus) so the view never snaps.
                 var delta = Vector2.ClampMagnitude(Mouse.current.delta.ReadValue(), 250f) * LookSensitivity;
@@ -122,20 +142,35 @@ namespace CoOpHorror.Player
             var input = Vector2.zero;
             var run = false;
             var jump = false;
-            if (k != null && !typing && alive)
+            if (k != null && !typing && alive && !ViewLocked)
             {
                 input = new Vector2((k.dKey.isPressed ? 1 : 0) - (k.aKey.isPressed ? 1 : 0), (k.wKey.isPressed ? 1 : 0) - (k.sKey.isPressed ? 1 : 0));
                 run = k.leftShiftKey.isPressed || k.rightShiftKey.isPressed;
-                jump = k.spaceKey.wasPressedThisFrame;
-                if (k.eKey.wasPressedThisFrame && signal != null) signal.SendSignal();
+                // Space is the skill-check key while holding the use button on something.
+                jump = k.spaceKey.wasPressedThisFrame && (interactor == null || !interactor.HoldingUse);
+                // E is reserved for the radio (planned); the dev sync signal is on G.
+                if (k.gKey.wasPressedThisFrame && signal != null) signal.SendSignal();
             }
 
             if (alive && AutomationMove != Vector2.zero) { input = AutomationMove; run |= AutomationRun; }
             jump |= alive && automationJump;
             automationJump = false;
 
+            var running = run && !Exhausted && input != Vector2.zero;
+            if (running)
+            {
+                Stamina = Mathf.Max(0f, Stamina - StaminaDrain * dt);
+                staminaRestAt = Time.time + StaminaRegenDelay;
+                if (Stamina <= 0f) Exhausted = true;
+            }
+            else if (Time.time >= staminaRestAt)
+            {
+                Stamina = Mathf.Min(1f, Stamina + StaminaRegen * dt);
+                if (Exhausted && Stamina >= StaminaResume) Exhausted = false;
+            }
+
             var move = (transform.right * input.x + transform.forward * input.y);
-            move = Vector3.ClampMagnitude(move, 1f) * (run ? RunSpeed : WalkSpeed);
+            move = Vector3.ClampMagnitude(move, 1f) * (running ? RunSpeed : WalkSpeed);
             var grounded = controller.isGrounded;
             if (grounded && verticalVelocity < 0f) verticalVelocity = -2f;
             if (grounded && jump) verticalVelocity = Mathf.Sqrt(2f * JumpHeight * -Gravity);

@@ -50,10 +50,27 @@ namespace CoOpHorror.Networking
             if (!response.Approved) return;
             slots[request.ClientNetworkId] = slot;
             response.Position = SlotPosition(slot);
-            response.Rotation = Quaternion.identity;
+            response.Rotation = Quaternion.Euler(0f, spawnYaw, 0f);
         }
 
-        public static Vector3 SlotPosition(int slot) => new((slot % 3 - 1) * 3f, 1.05f, (slot / 3) * 3f);
+        // Spawn area: the sandbox arena centre by default; a scene SpawnArea (ElecMole: inside the ship) overrides it.
+        private static readonly Vector3 DefaultSpawnOrigin = new(0f, 1.05f, 0f);
+        private const float DefaultSpawnSpacing = 3f;
+        private static Vector3 spawnOrigin = DefaultSpawnOrigin;
+        private static float spawnSpacing = DefaultSpawnSpacing;
+        private static float spawnYaw;
+
+        public static void SetSpawnArea(Vector3 origin, float yaw, float spacing)
+        {
+            spawnOrigin = origin;
+            spawnYaw = yaw;
+            spawnSpacing = spacing;
+        }
+
+        public static void ResetSpawnArea() => SetSpawnArea(DefaultSpawnOrigin, 0f, DefaultSpawnSpacing);
+
+        public static Vector3 SlotPosition(int slot) =>
+            spawnOrigin + Quaternion.Euler(0f, spawnYaw, 0f) * new Vector3((slot % 3 - 1) * spawnSpacing, 0f, (slot / 3) * spawnSpacing);
 
         // Server: spawn slot farthest from every other player.
         public static Vector3 PickRespawnPosition(Transform respawning)

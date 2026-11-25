@@ -409,7 +409,9 @@ GameObject:
   - component: {fileID: 3736711415629791877}
   - component: {fileID: 7951091907827980634}
   - component: {fileID: 5628153883727957391}
-  - component: {fileID: 418426437129588298}
+  - component: {fileID: 4645806025925708272}
+  - component: {fileID: 2936822374650166067}
+  - component: {fileID: 3368966868785268414}
   m_Layer: 0
   m_Name: ConnectionAvatar
   m_TagString: Untagged
@@ -595,7 +597,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.Player.FirstPersonController
   ShowTopMostFoldoutHeaderGroup: 1
   AimPivot: {fileID: 6947392981561710642}
---- !u!114 &418426437129588298
+--- !u!114 &4645806025925708272
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -604,7 +606,33 @@ MonoBehaviour:
   m_GameObject: {fileID: 8627508373892010549}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: aadddbfd3dd4c134dbeca99bc5ce6657, type: 3}
+  m_Script: {fileID: 11500000, guid: 9766275e5fe0f1342bee8b0dcd3e0027, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.Player.PlayerCombat
+  m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.Player.PlayerInteractor
+  ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &2936822374650166067
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8627508373892010549}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: eba2575d1361aa0448db1797d105394d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.Player.PlayerFlashlight
+  ShowTopMostFoldoutHeaderGroup: 1
+--- !u!114 &3368966868785268414
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8627508373892010549}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d5bf12be583d24e449a23581f6986214, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CoOpHorror.Player.PlayerCorpse
   ShowTopMostFoldoutHeaderGroup: 1
