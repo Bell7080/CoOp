@@ -78,7 +78,8 @@ namespace CoOpHorror.Gameplay
             var grid = PowerGrid.Instance;
             var fraction = grid != null && grid.IsSpawned ? grid.Fraction : 0f;
             Lamp.color = new Color(1f, 0.65f, 0.25f);
-            Lamp.intensity = 0.3f + fraction * 3f + (crankers > 0 ? 0.6f + Mathf.PingPong(Time.time * 6f, 0.5f) : 0f);
+            // Always a small glow so the generator can be found in the dark ship.
+            Lamp.intensity = 2.5f + fraction * 1.5f + (crankers > 0 ? 0.6f + Mathf.PingPong(Time.time * 6f, 0.5f) : 0f);
         }
     }
 }

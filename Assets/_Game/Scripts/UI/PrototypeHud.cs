@@ -20,7 +20,7 @@ namespace CoOpHorror.UI
         private Canvas canvas;
         private RectTransform healthFill, staminaFill, batteryFill;
         private Image staminaImage, batteryImage;
-        private Text healthText, batteryText, flashlightText;
+        private Text healthText, batteryText, flashlightText, inventoryText, radioText;
         private Text objectiveText, hintText, promptText, warningText, bannerText, reviveText;
         private GameObject ring;
         private Image ringBack, zone, great, needle;
@@ -57,6 +57,9 @@ namespace CoOpHorror.UI
             batteryFill = MakeVerticalBar("Battery", Left, new Vector2(30, 20), new Vector2(28, BatteryHeight), Electric, out batteryImage);
             batteryText = MakeText("BatteryText", 16, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 8), new Vector2(200, 24), new Vector2(0, 1));
             flashlightText = MakeText("FlashlightText", 14, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 30), new Vector2(240, 22), new Vector2(0, 1));
+            inventoryText = MakeText("InventoryText", 15, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 56), new Vector2(320, 60), new Vector2(0, 1));
+            radioText = MakeText("RadioText", 18, TextAnchor.UpperCenter, Top, new Vector2(0, -86), new Vector2(1000, 50), new Vector2(0.5f, 1));
+            radioText.color = new Color(1f, 0.82f, 0.4f);
 
             // Top: objective and flow hint.
             objectiveText = MakeText("Objective", 21, TextAnchor.MiddleCenter, Top, new Vector2(0, -30), new Vector2(1000, 30), new Vector2(0.5f, 1));
@@ -71,7 +74,7 @@ namespace CoOpHorror.UI
             warningText.color = new Color(1f, 0.3f, 0.25f);
             warningText.text = GameText.Get("proto.monsterNear");
             bannerText = MakeText("Banner", 34, TextAnchor.MiddleCenter, Center, new Vector2(0, 110), new Vector2(1300, 60), Center);
-            reviveText = MakeText("Revive", 22, TextAnchor.MiddleCenter, Center, new Vector2(0, -150), new Vector2(800, 34), Center);
+            reviveText = MakeText("Revive", 20, TextAnchor.UpperCenter, Center, new Vector2(0, -175), new Vector2(900, 60), Center);
             reviveText.color = Electric;
 
             // Skill check ring.
@@ -98,6 +101,7 @@ namespace CoOpHorror.UI
         private void Update()
         {
             var me = PlayerInteractor.Local;
+            HudCanvas.Follow(canvas);
             canvas.enabled = me != null && me.IsSpawned;
             Visible = canvas.enabled;
             if (!canvas.enabled) return;
@@ -121,18 +125,26 @@ namespace CoOpHorror.UI
 
             UpdateObjective(health);
             UpdateSkillCheck(me.Check);
+            UpdateInventory(me);
+            UpdateRadio(me);
 
             promptText.text = FirstPersonController.CursorCaptured && !FirstPersonController.ViewLocked ? me.Prompt : string.Empty;
             promptText.color = me.HoldingUse ? new Color(1f, 0.85f, 0.35f) : TextColor;
             promptRect.anchoredPosition = new Vector2(0, ring.activeSelf ? -RingSize / 2f - 30f : -44f);
 
             var dead = health != null && health.IsDead.Value;
-            reviveText.enabled = dead && !PlayerHealth.AutoRespawn;
-            if (reviveText.enabled) reviveText.text = GameText.Format("proto.reviveProgress", health.RevivePercent);
+            reviveText.enabled = dead;
+            if (dead)
+            {
+                var watching = FirstPersonController.SpectatingClient;
+                var spectate = watching.HasValue ? GameText.Format("proto.spectating", watching.Value) : GameText.Get("proto.spectatingNobody");
+                reviveText.text = spectate + "\n" + GameText.Format("proto.reviveProgress", health.RevivePercent);
+            }
 
-            var monster = TempMonster.Instance;
-            var near = monster != null && monster.IsSpawned && monster.Chasing.Value
-                && (monster.transform.position - me.transform.position).sqrMagnitude < 16f * 16f;
+            var near = false;
+            foreach (var monster in TempMonster.All)
+                if (monster != null && monster.IsSpawned && monster.Chasing.Value
+                    && (monster.transform.position - me.transform.position).sqrMagnitude < 16f * 16f) near = true;
             warningText.enabled = near && Mathf.PingPong(Time.unscaledTime * 2f, 1f) > 0.25f;
         }
 
@@ -152,7 +164,7 @@ namespace CoOpHorror.UI
                     if (door != null && door.IsSpawned && !door.Open.Value) objective = GameText.Get("proto.objectiveDoor");
                     else if (transmitter == null || !transmitter.IsSpawned) objective = string.Empty;
                     else if (transmitter.Phase.Value == TransmitterPhase.Dormant) objective = GameText.Get("proto.objectiveTransmitter");
-                    else if (transmitter.Phase.Value == TransmitterPhase.Active) objective = GameText.Format("proto.objective", transmitter.PluggedCount, transmitter.Required);
+                    else if (transmitter.Phase.Value == TransmitterPhase.Active) objective = GameText.Format("proto.objective", transmitter.PluggedCount, transmitter.Required, transmitter.PluggedValue);
                     else
                     {
                         objective = GameText.Get("proto.settling");
@@ -171,7 +183,7 @@ namespace CoOpHorror.UI
                     break;
                 case StagePhase.Escaped:
                     var aboard = health != null && stage.IsAboard(health.OwnerClientId);
-                    banner = GameText.Get(aboard ? "proto.escaped" : "proto.leftBehind");
+                    banner = aboard ? GameText.Format("proto.escaped", stage.Earned.Value) : GameText.Get("proto.leftBehind");
                     bannerColor = aboard ? new Color(0.45f, 1f, 0.6f) : new Color(1f, 0.35f, 0.25f);
                     break;
                 case StagePhase.Defeat:
@@ -188,6 +200,7 @@ namespace CoOpHorror.UI
         {
             var showResult = Time.time - check.LastResultTime < SkillCheck.ResultShowTime;
             ring.SetActive(check.Visible || showResult);
+            skillText.enabled = ring.activeSelf;
             if (!ring.activeSelf) return;
 
             var running = check.Current == SkillCheck.State.Running;
@@ -207,6 +220,35 @@ namespace CoOpHorror.UI
                 case SkillCheckResult.Good: skillText.text = GameText.Get("proto.skillGood"); skillText.color = TextColor; break;
                 default: skillText.text = GameText.Get("proto.skillMiss"); skillText.color = new Color(1f, 0.3f, 0.25f); break;
             }
+        }
+
+        private void UpdateInventory(PlayerInteractor me)
+        {
+            var inventory = me.GetComponent<PlayerInventory>();
+            if (inventory == null || !inventory.IsSpawned) { inventoryText.text = string.Empty; return; }
+            var line = new System.Text.StringBuilder(GameText.Get("proto.inventory"));
+            for (var i = 0; i < inventory.Slots.Value; i++)
+            {
+                var item = inventory.InSlot(i);
+                line.Append("  [").Append(i + 1).Append("] ").Append(item != null ? item.DisplayName : GameText.Get("proto.slotEmpty"));
+            }
+            inventoryText.text = line.ToString();
+        }
+
+        // Who is on the radio: what I send, and what I would hear over the radio.
+        private void UpdateRadio(PlayerInteractor me)
+        {
+            var mine = me.GetComponent<PlayerRadio>();
+            var lines = new System.Text.StringBuilder();
+            if (mine != null && mine.IsSpawned && mine.Mode.Value != RadioMode.Off)
+                lines.AppendLine(GameText.Get(mine.Mode.Value == RadioMode.ShipMic ? "proto.radioMic" : "proto.radioWalkie"));
+            foreach (var p in PlayerHealth.All)
+            {
+                if (p == null || !p.TryGetComponent<PlayerRadio>(out var radio) || radio == mine || !radio.IsSpawned) continue;
+                if (radio.Mode.Value != RadioMode.Off && VoiceRouting.HearsOverRadio(mine, radio, radio.Mode.Value))
+                    lines.AppendLine(GameText.Format(radio.Mode.Value == RadioMode.ShipMic ? "proto.radioHearMic" : "proto.radioHearWalkie", p.OwnerClientId));
+            }
+            radioText.text = lines.ToString();
         }
 
         // ---------- building blocks ----------

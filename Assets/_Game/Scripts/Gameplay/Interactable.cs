@@ -4,7 +4,8 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    public enum InteractKind : byte { None, Press, Hold }
+    // PressOrHold: a click uses it (e.g. hit a body), keeping the button down grabs it.
+    public enum InteractKind : byte { None, Press, Hold, PressOrHold }
 
     // Something a player can use with the left mouse button. Clients only read replicated state to show a
     // prompt; the host validates range/state and applies every change (one writer per value).
@@ -37,13 +38,21 @@ namespace CoOpHorror.Gameplay
         // Holding this shows timing skill checks to the holder.
         public virtual bool UsesSkillChecks => false;
 
+        // A sticky hold (telekinesis) continues while the button is down even when the player looks away.
+        public virtual bool StickyHold => false;
+
+        // Host-side reach while holding (sticky holds swing the object around).
+        public virtual float HoldRange => UseRange;
+
         // Server: the holder reported a skill check result.
         public virtual void ServerSkillCheck(PlayerInteractor who, SkillCheckResult result) { }
 
-        public bool ServerInRange(PlayerInteractor who)
+        public bool ServerInRange(PlayerInteractor who) => ServerInRange(who, UseRange);
+
+        public bool ServerInRange(PlayerInteractor who, float range)
         {
             var eye = who.EyePosition;
-            var limit = (UseRange + ServerRangeSlack) * (UseRange + ServerRangeSlack);
+            var limit = (range + ServerRangeSlack) * (range + ServerRangeSlack);
             foreach (var c in colliders)
                 if (c != null && c.enabled && (c.ClosestPoint(eye) - eye).sqrMagnitude <= limit) return true;
             return false;

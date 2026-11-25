@@ -7,23 +7,36 @@ using UnityEngine.AI;
 
 namespace CoOpHorror.Gameplay
 {
-    // Placeholder monster, host only: patrols waypoints on the NavMesh, chases the nearest player it can see,
-    // walks over to loud noises it hears, and body-slams players it touches.
-    // The NavMeshAgent runs on the host only; a server-authority NetworkTransform replicates it.
+    // Monster brain, host only: patrols waypoints on the NavMesh, chases the nearest player it can see,
+    // walks over to loud noises it hears, and body-slams players it touches. Each creature (TV walker,
+    // clock spider, fan crawler...) sets its own speeds, sight and damage. Players squeezed under furniture
+    // are only noticed right next to them. The NavMeshAgent runs on the host only; a server-authority
+    // NetworkTransform replicates it. The root pivot is at the creature's feet.
     [RequireComponent(typeof(NavMeshAgent))]
     public sealed class TempMonster : NetworkBehaviour
     {
-        public const float PatrolSpeed = 1.8f;
-        public const float InvestigateSpeed = 2.8f;
-        public const float ChaseSpeed = 3.3f;   // slower than walking (4) so players can escape
-        public const float SightRange = 14f;
-        public const float LoseTargetAfter = 4f;
+        public const float TuckedSightRange = 2.2f;
+        public const float LoseTargetAfter = 3f;
+        public const float LoseHiddenAfter = 1.2f;  // crouched out of its view or behind cover: gives up fast
+        public const float ViewHalfAngle = 60f;     // what it is looking at; players behind it are not spotted
+        public const float SenseRange = 2f;         // right next to it, it notices you whichever way it faces
         public const float LingerAtNoise = 3f;  // seconds spent looking around where it heard something
-        public const float AttackRange = 1.6f;
         public const float AttackCooldown = 1.2f;
-        public const int AttackDamage = 20;
 
-        public static TempMonster Instance { get; private set; }
+        public float PatrolSpeed = 1.8f;
+        public float InvestigateSpeed = 2.8f;
+        public float ChaseSpeed = 3.3f;         // below running speed (7) so players can escape
+        public float SightRange = 14f;
+        public float EyeHeight = 1.2f;
+        public float AttackRange = 1.6f;
+        public int AttackDamage = 20;
+
+        public static readonly List<TempMonster> All = new();
+        public static TempMonster Instance => All.Count > 0 ? All[0] : null;
+
+        // End-to-end tests freeze the monster so the scripted flow is deterministic (host only).
+        public static bool Frozen { get; set; }
+        public bool Investigating => investigating;
 
         public Transform[] Waypoints;
         public Renderer[] Eyes;
@@ -46,12 +59,13 @@ namespace CoOpHorror.Gameplay
         private float nextScan;
         private float nextRepath;
         private Vector3 lastGoal = new(float.MaxValue, 0f, 0f);
+        private bool targetHidden;
         private MaterialPropertyBlock block;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         private void Awake()
         {
-            Instance = this;
+            All.Add(this);
             agent = GetComponent<NavMeshAgent>();
             agent.enabled = false; // host enables it after the spawn teleport
             sync = GetComponent<NetworkTransform>();
@@ -62,7 +76,7 @@ namespace CoOpHorror.Gameplay
 
         public override void OnDestroy()
         {
-            if (Instance == this) Instance = null;
+            All.Remove(this);
             Noise.Server -= OnNoise;
             base.OnDestroy();
         }
@@ -83,6 +97,16 @@ namespace CoOpHorror.Gameplay
         {
             Noise.Server -= OnNoise;
             if (agent != null) agent.enabled = false;
+        }
+
+        // End-to-end tests: put the monster somewhere (host only).
+        public void ServerTeleport(Vector3 position)
+        {
+            if (!IsServer || !IsSpawned || !agent.enabled) return;
+            agent.Warp(position);
+            if (sync != null && sync.CanCommitToTransform) sync.Teleport(transform.position, transform.rotation, transform.localScale);
+            investigating = false;
+            target = null;
         }
 
         private void OnNoise(Vector3 position, float radius)
@@ -109,11 +133,14 @@ namespace CoOpHorror.Gameplay
                 resetPending = false;
             }
             if (!agent.enabled || !agent.isOnNavMesh) return;
+            agent.isStopped = Frozen;
+            if (Frozen) return;
 
             if (Time.time >= nextScan)
             {
                 nextScan = Time.time + 0.15f;
-                var seen = FindVisiblePlayer();
+                var seen = FindVisiblePlayer(out var hidden);
+                targetHidden = hidden;
                 if (seen != null)
                 {
                     target = seen;
@@ -122,7 +149,7 @@ namespace CoOpHorror.Gameplay
                     investigating = false;
                 }
             }
-            if (target != null && (!target.IsSpawned || target.IsDead.Value || Time.time - lastSeenTime > LoseTargetAfter))
+            if (target != null && (!target.IsSpawned || target.IsDead.Value || Time.time - lastSeenTime > (targetHidden ? LoseHiddenAfter : LoseTargetAfter)))
             {
                 // Lost them: check where they were last seen before going back to patrol.
                 if (target != null && !target.IsDead.Value) { investigating = true; noisePosition = lastSeenPosition; lingerUntil = 0f; }
@@ -169,23 +196,51 @@ namespace CoOpHorror.Gameplay
         private bool Arrived(float distance) =>
             !agent.pathPending && agent.remainingDistance <= distance;
 
-        private PlayerHealth FindVisiblePlayer()
+        // Sight: line of sight to the player's body, inside its view cone (or right next to it). While it is
+        // already chasing someone it keeps track of them outside the cone too, unless they crouch: ducking out
+        // of its view or slipping behind a shelf makes it lose them after LoseHiddenAfter. "hidden" reports
+        // whether the current target is hiding like that (used for the shorter give-up time).
+        private PlayerHealth FindVisiblePlayer(out bool hidden)
         {
+            hidden = false;
             PlayerHealth best = null;
             var bestDistance = SightRange * SightRange;
-            var eye = transform.position + Vector3.up * 0.8f;
+            var eye = transform.position + Vector3.up * EyeHeight;
             foreach (var p in PlayerHealth.All)
             {
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
-                var look = p.transform.position + Vector3.up * 0.6f;
+                p.TryGetComponent<FirstPersonController>(out var body);
+                var crouched = body != null && body.IsSpawned && body.Crouched.Value;
+                // Root sits about 1 m above the feet; aim at the middle of the (crouched) body.
+                var look = p.transform.position + Vector3.up * (crouched ? -0.65f : -0.25f);
                 var distance = (look - eye).sqrMagnitude;
+                var isTarget = p == target;
                 if (distance > bestDistance) continue;
                 // The ray starts inside the monster's own capsule, which raycasts ignore.
                 if (Physics.Linecast(eye, look, out var hit, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
-                    && hit.collider.GetComponentInParent<PlayerHealth>() != p) continue;
+                    && hit.collider.GetComponentInParent<PlayerHealth>() != p)
+                {
+                    if (isTarget) hidden = true; // behind cover
+                    continue;
+                }
+                // Squeezed under furniture: only noticed right next to it.
+                if (distance > TuckedSightRange * TuckedSightRange && body != null && body.IsTucked())
+                {
+                    if (isTarget) hidden = true;
+                    continue;
+                }
+                var near = distance < SenseRange * SenseRange;
+                var flat = Flat(look - transform.position);
+                var inCone = flat.sqrMagnitude < 0.01f || Vector3.Angle(transform.forward, flat) <= ViewHalfAngle;
+                if (!near && !inCone)
+                {
+                    if (!isTarget) continue;                    // not looking that way
+                    if (crouched) { hidden = true; continue; }  // ducked out of its view
+                }
                 best = p;
                 bestDistance = distance;
             }
+            if (best != null && best == target) hidden = false;
             return best;
         }
 
@@ -200,6 +255,8 @@ namespace CoOpHorror.Gameplay
                 if (Flat(offset).magnitude > AttackRange || Mathf.Abs(offset.y) > 1.6f) continue;
                 var push = Flat(offset).normalized * 6f + Vector3.up * 3f;
                 p.ServerApplyDamage(AttackDamage, push);
+                // Whatever the victim was carrying takes the hit too.
+                if (p.TryGetComponent<PlayerInteractor>(out var victim) && victim.HeldGrabbable is Appliance carried) carried.ServerDamage(0.15f);
                 nextAttack = Time.time + AttackCooldown;
                 return;
             }

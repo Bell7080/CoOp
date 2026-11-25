@@ -6,7 +6,9 @@ using UnityEngine.AI;
 
 namespace CoOpHorror.Gameplay
 {
-    // A closed door that opens once it is fed enough shared power (hold the left button).
+    // A closed door that opens once it is fed enough shared power (hold the left button). After that it is
+    // powered: a click opens or closes it (not while someone stands in the doorway). A powered door keeps
+    // sipping a little shared power, open or shut; with the grid empty it stays stuck where it is.
     // The panel slides up; while closed it also blocks monster paths (NavMeshObstacle).
     public sealed class PoweredDoor : Interactable
     {
@@ -28,6 +30,9 @@ namespace CoOpHorror.Gameplay
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
+        public bool Powered => Charge.Value >= Capacity - 0.01f;
+        public const float DoorwayClearance = 1.1f;
+        public const float DrainPerSecond = 0.12f; // ~14 minutes for a full grid
 
         protected override void Awake()
         {
@@ -49,7 +54,13 @@ namespace CoOpHorror.Gameplay
 
         public override InteractKind Describe(PlayerInteractor who, out string prompt)
         {
-            if (Open.Value) { prompt = string.Empty; return InteractKind.None; }
+            if (Powered)
+            {
+                if (PowerGrid.Instance == null || PowerGrid.Instance.IsEmpty) { prompt = GameText.Get("interact.doorDead"); return InteractKind.None; }
+                if (Open.Value && SomeoneInDoorway()) { prompt = GameText.Get("interact.doorBlocked"); return InteractKind.None; }
+                prompt = GameText.Get(Open.Value ? "interact.doorClose" : "interact.doorOpen");
+                return InteractKind.Press;
+            }
             var grid = PowerGrid.Instance;
             if (grid == null || grid.IsEmpty)
             {
@@ -60,9 +71,28 @@ namespace CoOpHorror.Gameplay
             return InteractKind.Hold;
         }
 
+        public override void ServerUse(PlayerInteractor who)
+        {
+            if (!Powered || PowerGrid.Instance == null || PowerGrid.Instance.IsEmpty) return;
+            if (Open.Value && SomeoneInDoorway()) return;
+            Open.Value = !Open.Value;
+        }
+
+        private bool SomeoneInDoorway()
+        {
+            foreach (var p in PlayerHealth.All)
+            {
+                if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
+                var offset = p.transform.position - transform.position;
+                offset.y = 0f;
+                if (offset.magnitude < DoorwayClearance) return true;
+            }
+            return false;
+        }
+
         public override bool ServerHold(PlayerInteractor who, float dt)
         {
-            if (Open.Value) return false;
+            if (Open.Value || Powered) return false;
             var grid = PowerGrid.Instance;
             if (grid == null) return false;
             var taken = grid.ServerTake(Mathf.Min(ChargeRate * dt, Capacity - Charge.Value));
@@ -82,6 +112,8 @@ namespace CoOpHorror.Gameplay
 
         private void Update()
         {
+            if (IsServer && IsSpawned && Powered && PowerGrid.Instance != null)
+                PowerGrid.Instance.ServerTake(DrainPerSecond * Time.deltaTime);
             var open = IsSpawned && Open.Value;
             slide = Mathf.MoveTowards(slide, open ? 1f : 0f, SlideSpeed / OpenHeight * Time.deltaTime);
             if (Panel != null) Panel.localPosition = panelHome + Vector3.up * (OpenHeight * slide);

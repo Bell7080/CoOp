@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using CoOpHorror.Networking;
 using Unity.Netcode;
 using Unity.Netcode.Components;
@@ -7,7 +8,8 @@ using UnityEngine.InputSystem;
 
 namespace CoOpHorror.Player
 {
-    // First-person movement for the development fight room.
+    // First-person movement for the squishy mole alien. Ctrl squeezes the body down (crouch) to crawl under
+    // desks and beds; tucked under something, monsters only notice you up close.
     // Movement stays owner-authoritative through the Owner NetworkTransform (prototype, not anti-cheat).
     [RequireComponent(typeof(CharacterController))]
     public sealed class FirstPersonController : NetworkBehaviour
@@ -22,6 +24,14 @@ namespace CoOpHorror.Player
         public const float StaminaRegen = 0.16f;    // per second after the delay
         public const float StaminaRegenDelay = 0.8f;
         public const float StaminaResume = 0.3f;    // after running dry, wait until this much is back
+        public const float CrouchSpeed = 1.8f;
+        public const float StandHeight = 1.5f;      // CharacterController; the root sits 1 m above the feet
+        public const float StandCenterY = -0.25f;
+        public const float CrouchHeight = 0.8f;
+        public const float CrouchCenterY = -0.6f;
+        public const float StandEyeY = 0.25f;
+        public const float CrouchEyeY = -0.32f;
+        public const float TuckedCheck = 1.3f;      // something solid this close above a crouched player hides them
 
         public Transform AimPivot;
 
@@ -31,6 +41,9 @@ namespace CoOpHorror.Player
 
         // Owner-written so remote players see roughly where the attacker is looking.
         public readonly NetworkVariable<float> Pitch = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+        public readonly NetworkVariable<bool> Crouched = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
+
+        public bool AutomationCrouch { get; set; }
 
         public static FirstPersonController Local { get; private set; }
         public static bool CursorCaptured { get; private set; }
@@ -50,7 +63,6 @@ namespace CoOpHorror.Player
         private PlayerHealth health;
         private PlayerInteractor interactor;
         private ConnectionAvatar signal;
-        private Vector3 pivotHome;
         private float staminaRestAt;
         private float verticalVelocity;
         private Vector3 impulse;
@@ -71,7 +83,6 @@ namespace CoOpHorror.Player
             interactor = GetComponent<PlayerInteractor>();
             signal = GetComponent<ConnectionAvatar>();
             if (AimPivot == null) AimPivot = transform.Find("AimPivot");
-            if (AimPivot != null) pivotHome = AimPivot.localPosition;
         }
 
         public override void OnNetworkSpawn()
@@ -111,6 +122,7 @@ namespace CoOpHorror.Player
         private void Update()
         {
             if (!IsSpawned) return;
+            ApplyStance();
             if (!IsOwner)
             {
                 if (AimPivot != null)
@@ -124,12 +136,13 @@ namespace CoOpHorror.Player
             var k = Keyboard.current;
             var dt = Mathf.Clamp(Time.deltaTime, 0f, 0.05f);
 
-            // A discharged body sees from the floor.
-            if (AimPivot != null)
-                AimPivot.localPosition = Vector3.MoveTowards(AimPivot.localPosition, alive ? pivotHome : new Vector3(0f, -0.7f, 0.9f), 3f * dt);
+            // Dead: an invisible ghost spectating the living.
+            if (!alive) { UpdateSpectator(dt); return; }
+            if (spectating) StopSpectating();
 
             // Locking the cursor produces one large delta; ignore the first frames after capture.
-            if (CursorCaptured && alive && !ViewLocked && Mouse.current != null && Time.frameCount > captureFrame + 2 && Time.unscaledTime > captureTime + 0.2f)
+            var turningHeld = interactor != null && interactor.RotatingHeld;
+            if (CursorCaptured && !ViewLocked && !turningHeld && Mouse.current != null && Time.frameCount > captureFrame + 2 && Time.unscaledTime > captureTime + 0.2f)
             {
                 // Clamp per-frame jumps (cursor warp on lock/focus) so the view never snaps.
                 var delta = Vector2.ClampMagnitude(Mouse.current.delta.ReadValue(), 250f) * LookSensitivity;
@@ -142,8 +155,10 @@ namespace CoOpHorror.Player
             var input = Vector2.zero;
             var run = false;
             var jump = false;
+            var crouch = AutomationCrouch;
             if (k != null && !typing && alive && !ViewLocked)
             {
+                crouch |= k.leftCtrlKey.isPressed || k.rightCtrlKey.isPressed;
                 input = new Vector2((k.dKey.isPressed ? 1 : 0) - (k.aKey.isPressed ? 1 : 0), (k.wKey.isPressed ? 1 : 0) - (k.sKey.isPressed ? 1 : 0));
                 run = k.leftShiftKey.isPressed || k.rightShiftKey.isPressed;
                 // Space is the skill-check key while holding the use button on something.
@@ -155,6 +170,11 @@ namespace CoOpHorror.Player
             if (alive && AutomationMove != Vector2.zero) { input = AutomationMove; run |= AutomationRun; }
             jump |= alive && automationJump;
             automationJump = false;
+
+            // Stay squeezed while something is overhead.
+            if (!crouch && Crouched.Value && !CanStandUp()) crouch = true;
+            if (Crouched.Value != crouch) Crouched.Value = crouch;
+            if (crouch) { run = false; jump = false; }
 
             var running = run && !Exhausted && input != Vector2.zero;
             if (running)
@@ -170,13 +190,121 @@ namespace CoOpHorror.Player
             }
 
             var move = (transform.right * input.x + transform.forward * input.y);
-            move = Vector3.ClampMagnitude(move, 1f) * (running ? RunSpeed : WalkSpeed);
+            move = Vector3.ClampMagnitude(move, 1f) * (crouch ? CrouchSpeed : running ? RunSpeed : WalkSpeed);
             var grounded = controller.isGrounded;
             if (grounded && verticalVelocity < 0f) verticalVelocity = -2f;
             if (grounded && jump) verticalVelocity = Mathf.Sqrt(2f * JumpHeight * -Gravity);
             verticalVelocity += Gravity * dt;
             impulse = Vector3.MoveTowards(impulse, Vector3.zero, (grounded ? 14f : 4f) * dt);
             if (controller.enabled) controller.Move((move + impulse + Vector3.up * verticalVelocity) * dt);
+        }
+
+        // ---------- crouch ----------
+
+        // Every peer sizes the capsule from the replicated stance so host-side sight checks match.
+        private void ApplyStance()
+        {
+            var crouched = Crouched.Value;
+            var height = crouched ? CrouchHeight : StandHeight;
+            if (!Mathf.Approximately(controller.height, height))
+            {
+                controller.height = height;
+                controller.center = new Vector3(0f, crouched ? CrouchCenterY : StandCenterY, 0f);
+            }
+            if (AimPivot != null)
+            {
+                var eye = new Vector3(0f, crouched ? CrouchEyeY : StandEyeY, 0f);
+                AimPivot.localPosition = Vector3.MoveTowards(AimPivot.localPosition, eye, 4f * Time.deltaTime);
+            }
+        }
+
+        private bool CanStandUp()
+        {
+            var radius = controller.radius * 0.9f;
+            var top = transform.position + Vector3.up * (CrouchCenterY + CrouchHeight / 2f - radius);
+            return !Physics.SphereCast(top, radius, Vector3.up, out _, StandHeight - CrouchHeight + 0.05f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+        }
+
+        // Host: crouched under furniture (something solid just overhead) — hidden from monsters at range.
+        public bool IsTucked()
+        {
+            if (!Crouched.Value) return false;
+            var head = transform.position + Vector3.up * (CrouchCenterY + CrouchHeight / 2f - 0.05f);
+            var hits = Physics.RaycastAll(head, Vector3.up, TuckedCheck, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            foreach (var h in hits) if (!h.collider.transform.IsChildOf(transform)) return true;
+            return false;
+        }
+
+        // ---------- ghost spectating ----------
+
+        public static ulong? SpectatingClient { get; private set; }
+        private bool spectating;
+        private int spectateIndex;
+        private Vector3 spectateVelocity;
+        private static readonly List<PlayerHealth> Living = new();
+
+        private void UpdateSpectator(float dt)
+        {
+            var cam = attachedCamera;
+            if (cam == null) return;
+            if (!spectating)
+            {
+                spectating = true;
+                cam.transform.SetParent(null, true);
+            }
+            Living.Clear();
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned && !p.IsDead.Value && p.gameObject != gameObject) Living.Add(p);
+            Living.Sort((a, b) => a.OwnerClientId.CompareTo(b.OwnerClientId));
+            var m = Mouse.current;
+            if (CursorCaptured && !ViewLocked && m != null && Living.Count > 0)
+            {
+                if (m.leftButton.wasPressedThisFrame) spectateIndex++;
+                if (m.rightButton.wasPressedThisFrame) spectateIndex--;
+            }
+
+            Vector3 focus;
+            Vector3 back;
+            if (Living.Count > 0)
+            {
+                var target = Living[((spectateIndex % Living.Count) + Living.Count) % Living.Count];
+                SpectatingClient = target.OwnerClientId;
+                focus = target.transform.position + Vector3.up * 0.7f;
+                back = -target.transform.forward;
+            }
+            else
+            {
+                // Nobody left: hover over our own body.
+                SpectatingClient = null;
+                var body = health != null ? health.Body : null;
+                focus = (body != null ? body.transform.position : transform.position) + Vector3.up * 0.3f;
+                back = Quaternion.Euler(0f, Time.time * 12f, 0f) * Vector3.back;
+            }
+            var desired = focus + back * 3.2f + Vector3.up * 1.3f;
+            var toDesired = desired - focus;
+            if (Physics.SphereCast(focus, 0.2f, toDesired.normalized, out var hit, toDesired.magnitude, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                desired = focus + toDesired.normalized * Mathf.Max(0.4f, hit.distance - 0.1f);
+            cam.transform.position = Vector3.SmoothDamp(cam.transform.position, desired, ref spectateVelocity, 0.15f, 50f, dt);
+            cam.transform.rotation = Quaternion.Slerp(cam.transform.rotation, Quaternion.LookRotation(focus - cam.transform.position), 1f - Mathf.Exp(-10f * dt));
+        }
+
+        private void StopSpectating()
+        {
+            spectating = false;
+            SpectatingClient = null;
+            if (attachedCamera == null || AimPivot == null) return;
+            attachedCamera.transform.SetParent(AimPivot, false);
+            attachedCamera.transform.localPosition = Vector3.zero;
+            attachedCamera.transform.localRotation = Quaternion.identity;
+        }
+
+        // End-to-end tests (owner): face a direction.
+        public void AutomationLook(float yaw, float lookPitch)
+        {
+            transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+            pitch = Mathf.Clamp(lookPitch, -MaxPitch, MaxPitch);
+            if (AimPivot != null) AimPivot.localRotation = Quaternion.Euler(pitch, 0, 0);
+            Pitch.Value = pitch;
         }
 
         // Called on the owner by the server through PlayerHealth.
@@ -198,8 +326,12 @@ namespace CoOpHorror.Player
             impulse = Vector3.zero;
         }
 
+        // A full-screen view (CCTV) frees the cursor and takes it back when it closes.
+        public static void SetCursorCaptured(bool captured) => SetCaptured(captured);
+
         private void UpdateCursor()
         {
+            if (ViewLocked) return;
             var k = Keyboard.current;
             var m = Mouse.current;
             if (k != null && k.escapeKey.wasPressedThisFrame) { SetCaptured(false); return; }
@@ -253,8 +385,10 @@ namespace CoOpHorror.Player
         private void DetachCamera()
         {
             if (attachedCamera == null || !cameraHomeSaved) return;
-            if (attachedCamera.transform.parent == AimPivot)
+            if (attachedCamera.transform.parent == AimPivot || spectating)
             {
+                spectating = false;
+                SpectatingClient = null;
                 attachedCamera.transform.SetParent(cameraHomeParent, false);
                 attachedCamera.transform.SetPositionAndRotation(cameraHomePosition, cameraHomeRotation);
             }

@@ -11,8 +11,9 @@ namespace CoOpHorror.Gameplay
     // ship's power and slowly die. Every peer applies the matching lighting from the replicated phase.
     public sealed class StageDirector : NetworkBehaviour
     {
-        public const float LaunchWait = 30f;           // countdown after the launch button is pressed
-        public const float LaunchWhenAllAboard = 5f;   // shortened to this once every living player is aboard
+        public const float LaunchWait = 10f;           // countdown when pressed before everyone is aboard
+        public const float LaunchWhenAllAboard = 3f;   // shortened to this once every living player is aboard
+        public const int LaunchReviveHealth = 50;      // bodies aboard revive in the ship's surge
         public const int LeftBehindDrainPerTick = 2;   // health lost every DrainInterval outside the departed ship
         public const float DrainInterval = 0.5f;
 
@@ -27,6 +28,7 @@ namespace CoOpHorror.Gameplay
 
         public readonly NetworkVariable<StagePhase> Phase = new(StagePhase.Exploring);
         public readonly NetworkVariable<double> LaunchAt = new(0d);
+        public readonly NetworkVariable<int> Earned = new(0);          // settlement value of this stage
         public NetworkList<ulong> Aboard; // OwnerClientIds inside the ship when it left
 
         private float[] roomIntensity;
@@ -62,6 +64,7 @@ namespace CoOpHorror.Gameplay
             if (!IsServer) return;
             Phase.Value = StagePhase.Exploring;
             LaunchAt.Value = 0d;
+            Earned.Value = 0;
             Aboard.Clear();
         }
 
@@ -84,13 +87,19 @@ namespace CoOpHorror.Gameplay
         public bool IsLeftBehind(PlayerHealth player) =>
             IsSpawned && Phase.Value == StagePhase.Escaped && player != null && !IsAboard(player.OwnerClientId);
 
-        // Transmitter is gone: every appliance and CCTV camera loses its power and the map goes dark.
+        // Transmitter is gone: every appliance and fixture (CCTV, lamps) loses its power and the map goes dark.
         public void ServerBlackout()
         {
             if (!IsServer || Phase.Value != StagePhase.Exploring) return;
             foreach (var appliance in Appliance.All) if (appliance.IsSpawned) appliance.ServerDischarge();
-            foreach (var cctv in CctvCamera.All) if (cctv.IsSpawned) cctv.ServerDischarge();
+            foreach (var device in InstalledDevice.Devices) if (device.IsSpawned) device.ServerDischarge();
             Phase.Value = StagePhase.Blackout;
+        }
+
+        // Server: the settlement value is fixed when the transmitter has swallowed everything.
+        public void ServerRecordEarnings(int value)
+        {
+            if (IsServer) Earned.Value = value;
         }
 
         public bool ServerArmLaunch()
@@ -153,9 +162,19 @@ namespace CoOpHorror.Gameplay
             var aliveAboard = 0;
             foreach (var p in PlayerHealth.All)
             {
-                if (p == null || !p.IsSpawned || !InShip(p.transform.position)) continue;
+                if (p == null || !p.IsSpawned || p.IsDead.Value || !InShip(p.transform.position)) continue;
                 Aboard.Add(p.OwnerClientId);
-                if (!p.IsDead.Value) aliveAboard++;
+                aliveAboard++;
+            }
+            // Bodies carried aboard come back in the ship's surge right before launch.
+            foreach (var body in Corpse.Bodies)
+            {
+                if (body == null || !body.IsSpawned || !InShip(body.transform.position)) continue;
+                var player = body.Player;
+                if (player == null || !player.IsDead.Value || IsAboard(player.OwnerClientId)) continue;
+                player.ServerRevive(body.transform.position + Vector3.up * 1.05f, LaunchReviveHealth, true);
+                Aboard.Add(player.OwnerClientId);
+                aliveAboard++;
             }
             if (ShipDoor != null) ShipDoor.ServerClose();
             Phase.Value = aliveAboard > 0 ? StagePhase.Escaped : StagePhase.Defeat;

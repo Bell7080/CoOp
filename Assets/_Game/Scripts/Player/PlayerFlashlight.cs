@@ -11,6 +11,7 @@ namespace CoOpHorror.Player
     {
         public const float DrainPerSecond = 0.15f;
         public const float LowPowerFraction = 0.1f;
+        public const float BeamIntensity = 24f;
 
         public readonly NetworkVariable<bool> On = new(false);
 
@@ -29,10 +30,10 @@ namespace CoOpHorror.Player
             beam = go.AddComponent<Light>();
             beam.type = LightType.Spot;
             beam.color = new Color(1f, 0.95f, 0.82f);
-            beam.range = 18f;
-            beam.spotAngle = 52f;
-            beam.innerSpotAngle = 28f;
-            beam.intensity = 3f;
+            beam.range = 45f;
+            beam.spotAngle = 78f;
+            beam.innerSpotAngle = 40f;
+            beam.intensity = BeamIntensity;
             beam.shadows = LightShadows.None;
             beam.enabled = false;
         }
@@ -40,6 +41,9 @@ namespace CoOpHorror.Player
         public override void OnNetworkSpawn()
         {
             if (IsServer) On.Value = false;
+            // Only your own torch casts shadows (cost); it is what carves the dark.
+            beam.shadows = IsOwner ? LightShadows.Soft : LightShadows.None;
+            beam.shadowStrength = 0.9f;
         }
 
         private bool Dead => health != null && health.IsDead.Value;
@@ -63,7 +67,7 @@ namespace CoOpHorror.Player
             if (!beam.enabled) return;
             // Weak, flickering beam when the shared grid is nearly empty.
             var low = grid != null && grid.IsSpawned && grid.Fraction < LowPowerFraction;
-            beam.intensity = low ? (Random.value < 0.08f ? 0.3f : 1.6f) : 3f;
+            beam.intensity = low ? (Random.value < 0.08f ? 1f : BeamIntensity * 0.45f) : BeamIntensity;
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]

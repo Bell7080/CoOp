@@ -66,13 +66,14 @@ namespace CoOpHorror.UI
         private void Update()
         {
             Bind(PlayerHealth.Local);
+            HudCanvas.Follow(canvas);
             canvas.enabled = bound != null && !FirstPersonController.ViewLocked;
             if (bound == null) return;
 
             healthText.enabled = !PrototypeHud.Visible;
             healthText.text = GameText.Format("hud.health", bound.Health.Value, PlayerHealth.MaxHealth);
             healthText.color = bound.Health.Value > 30 ? new Color(0.9f, 0.96f, 0.95f) : new Color(1f, 0.4f, 0.35f);
-            centerText.text = bound.IsDead.Value ? GameText.Get(PlayerHealth.AutoRespawn ? "hud.dead" : "hud.discharged") : FirstPersonController.CursorCaptured ? "" : GameText.Get("hud.cursorFree");
+            centerText.text = bound.IsDead.Value ? GameText.Get("hud.discharged") : FirstPersonController.CursorCaptured ? "" : GameText.Get("hud.cursorFree");
 
             flashAlpha = Mathf.MoveTowards(flashAlpha, 0f, Time.unscaledDeltaTime * 1.6f);
             flash.color = new Color(0.8f, 0f, 0f, flashAlpha);

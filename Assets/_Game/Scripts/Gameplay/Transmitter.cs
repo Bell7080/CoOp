@@ -8,10 +8,10 @@ namespace CoOpHorror.Gameplay
 {
     public enum TransmitterPhase : byte { Dormant, Active, Settling, Sinking, Gone }
 
-    // Power it first (hold, with skill checks), then plug charged appliances into every socket.
-    // When the last socket is filled: the appliances are sucked in, the transmitter sinks into the ground
-    // and the map blacks out. Socket use is derived from each Appliance.Socket (single source of truth);
-    // the phase clock is host-written and every peer animates from it.
+    // Power it first (hold, with skill checks), then plug charged appliances' cords into every socket.
+    // When the last socket is filled: the plugged appliances are yanked in along their cords, the transmitter
+    // sinks into the ground and the map blacks out. Socket use is derived from each CordPlug (single source
+    // of truth); the phase clock is host-written and every peer animates from it.
     public sealed class Transmitter : SkillCheckedInteractable
     {
         public const float ChargeRate = 20f;
@@ -42,6 +42,7 @@ namespace CoOpHorror.Gameplay
         private Vector3 bodyHome;
         private Collider[] bodyColliders;
         private readonly HashSet<(ulong, ulong)> flyingHits = new();
+        private int settledValue;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         public int Required => Sockets != null ? Sockets.Length : 0;
@@ -61,8 +62,19 @@ namespace CoOpHorror.Gameplay
             get
             {
                 var count = 0;
-                foreach (var a in Appliance.All) if (a.IsSpawned && a.IsPlugged) count++;
+                foreach (var p in CordPlug.All) if (p.IsSocketed) count++;
                 return count;
+            }
+        }
+
+        // Settlement estimate: current value of everything plugged in.
+        public int PluggedValue
+        {
+            get
+            {
+                var sum = 0;
+                foreach (var p in CordPlug.All) if (p.IsSocketed && p.Appliance != null) sum += p.Appliance.Value.Value;
+                return sum;
             }
         }
 
@@ -104,7 +116,7 @@ namespace CoOpHorror.Gameplay
 
         private bool SocketUsed(int index)
         {
-            foreach (var a in Appliance.All) if (a.IsSpawned && a.Socket.Value == index) return true;
+            foreach (var p in CordPlug.All) if (p.IsSocketed && p.Socket.Value == index) return true;
             return false;
         }
 
@@ -125,13 +137,18 @@ namespace CoOpHorror.Gameplay
                     prompt = GameText.Format("interact.transmitterCharge", ChargePercent);
                     return InteractKind.Hold;
                 case TransmitterPhase.Active:
-                    var carried = who.Carrying;
-                    if (carried != null && carried.IsCharged)
+                    var plug = who.HeldPlug;
+                    if (plug != null && plug.Appliance != null)
                     {
-                        prompt = GameText.Format("interact.plug", carried.DisplayName);
+                        if (!plug.Appliance.IsCharged)
+                        {
+                            prompt = GameText.Format("interact.plugNotCharged", plug.DisplayName);
+                            return InteractKind.None;
+                        }
+                        prompt = GameText.Format("interact.plug", plug.DisplayName);
                         return InteractKind.Press;
                     }
-                    prompt = GameText.Format("interact.transmitterStatus", PluggedCount, Required);
+                    prompt = GameText.Format("interact.transmitterStatus", PluggedCount, Required, PluggedValue);
                     return InteractKind.None;
                 default:
                     prompt = GameText.Get("interact.transmitterDone");
@@ -160,18 +177,19 @@ namespace CoOpHorror.Gameplay
             else if (result == SkillCheckResult.Great) Charge.Value = Mathf.Min(Capacity - 0.02f, Charge.Value + Capacity * 0.05f);
         }
 
-        // Plug in the carried appliance.
+        // Plug in the carried cord.
         public override void ServerUse(PlayerInteractor who)
         {
             if (Phase.Value != TransmitterPhase.Active) return;
-            var carried = who.Carrying;
-            if (carried == null || !carried.IsCharged) return;
+            var plug = who.HeldPlug;
+            if (plug == null || plug.Appliance == null || !plug.Appliance.IsCharged) return;
             var socket = FreeSocket();
             if (socket < 0) return;
-            carried.ServerPlug(socket);
+            plug.ServerSocket(socket);
             ProtoAudio.Play(ProtoSound.Clunk, transform.position, 1f);
             if (!IsComplete) return;
             Debug.Log("[ElecMole] Transmitter complete; settling");
+            settledValue = PluggedValue;
             flyingHits.Clear();
             ServerSetPhase(TransmitterPhase.Settling);
         }
@@ -192,6 +210,7 @@ namespace CoOpHorror.Gameplay
                     break;
                 case TransmitterPhase.Sinking:
                     if (PhaseElapsed < SinkDuration) break;
+                    if (StageDirector.Instance != null) StageDirector.Instance.ServerRecordEarnings(settledValue);
                     ServerSetPhase(TransmitterPhase.Gone);
                     Debug.Log("[ElecMole] Transmitter gone; blackout");
                     if (StageDirector.Instance != null) StageDirector.Instance.ServerBlackout();
@@ -204,9 +223,8 @@ namespace CoOpHorror.Gameplay
         {
             foreach (var appliance in Appliance.All)
             {
-                if (!appliance.IsSpawned || !appliance.IsPlugged) continue;
-                var pose = appliance.CurrentPose(out _, out var swallowed);
-                if (swallowed) continue;
+                if (!appliance.IsSpawned || !appliance.IsPlugged || appliance.Swallowed.Value) continue;
+                var pose = new Pose(appliance.transform.position, appliance.transform.rotation);
                 foreach (var player in PlayerHealth.All)
                 {
                     if (player == null || !player.IsSpawned || player.IsDead.Value) continue;

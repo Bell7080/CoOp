@@ -75,7 +75,7 @@ namespace CoOpHorror.UI
         private void Update()
         {
             // While playing with a captured cursor the panel stays out of the way; Esc brings it back.
-            var hidden = room != null && room.Connected && FirstPersonController.CursorCaptured;
+            var hidden = room != null && room.Connected && (FirstPersonController.CursorCaptured || FirstPersonController.ViewLocked);
             group.alpha = hidden ? 0f : 1f;
             group.blocksRaycasts = group.interactable = !hidden;
             if (Time.unscaledTime < nextRefresh) return;

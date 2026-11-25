@@ -6,45 +6,58 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // A household appliance: charge it from the shared grid (hold the left button; several players can charge
-    // together and share a miss penalty), pick it up once charged (left click), carry it and plug it into the
-    // transmitter (left click on the transmitter), or drop it (Q).
-    // No NetworkTransform: every peer places it from replicated state (rest pose / carrier / socket),
-    // so a carried appliance follows the carrier's own smoothly-synced transform.
-    public sealed class Appliance : SkillCheckedInteractable
+    // A household appliance.
+    // Uncharged: hold the left button to feed it shared power (skill checks; a miss stalls everyone on it).
+    // Charged: hold the left button to lift it with telekinesis (Grabbable), or take its plug (CordPlug) and
+    // pull the cord to the transmitter. Knocks and being dragged by the cord lower its value.
+    // Tiny appliances fit in the inventory. Once its plug is in the transmitter, settlement swallows it.
+    public sealed class Appliance : Grabbable
     {
         public const float ChargeRate = 25f;      // power per second per charging player
         public const float FailStall = 2f;
         public const float FailNoiseRadius = 9f;
-        public const ulong NoCarrier = ulong.MaxValue;
+        public const float ImpactLossPerSpeed = 0.035f; // share of base value lost per m/s above the impact speed
+        public const float MaxImpactLoss = 0.3f;
+        public const float ScrapeLossPerSecond = 0.03f;
+        public const ulong NoOwner = ulong.MaxValue;
 
-        public static readonly List<Appliance> All = new();
+        public static new readonly List<Appliance> All = new();
 
         public string NameKey = "appliance.tv";
         public float Capacity = 30f;
-        public int BaseValue = 100;               // expected settlement value when undamaged
+        public int BaseValue = 100;
+        public bool Tiny;                         // fits in the inventory
+        public float CordLength = 6f;
+        public Transform CordAnchor;
+        public CordPlug Plug;
         public Renderer Indicator;
         public Light Glow;
+        public bool StartsHidden;                 // salvage from an InstalledDevice: appears when ripped off
 
         public readonly NetworkVariable<float> Charge = new(0f);
-        public readonly NetworkVariable<ulong> Carrier = new(NoCarrier); // NetworkObjectId of the carrying player
-        public readonly NetworkVariable<int> Socket = new(-1);           // transmitter socket index when plugged
-        public readonly NetworkVariable<Vector3> RestPosition = new();
-        public readonly NetworkVariable<float> RestYaw = new();
+        public readonly NetworkVariable<int> Value = new(0);
+        public readonly NetworkVariable<ulong> StoredBy = new(NoOwner);
+        public readonly NetworkVariable<int> StoredSlot = new(-1);
+        public readonly NetworkVariable<bool> Swallowed = new(false);
+        public readonly NetworkVariable<bool> Revealed = new(false);
 
         public bool IsCharged => Charge.Value >= Capacity - 0.01f;
-        public bool IsCarried => Carrier.Value != NoCarrier;
-        public bool IsPlugged => Socket.Value >= 0;
+        public bool IsStored => IsSpawned && StoredBy.Value != NoOwner;
+        public bool IsPlugged => Plug != null && Plug.IsSocketed;
+        public bool IsGone => IsSpawned && (Swallowed.Value || StoredBy.Value != NoOwner || (StartsHidden && !Revealed.Value));
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
-        public string DisplayName => GameText.Get(NameKey);
-        public override bool UsesSkillChecks => !IsCharged && !IsCarried && !IsPlugged;
+        public override string DisplayName => GameText.Get(NameKey);
+        public override bool UsesSkillChecks => IsSpawned && !IsCharged && !IsGone;
+        public override bool StickyHold => IsCharged;
+        public override float HoldRange => IsCharged ? base.HoldRange : UseRange;
 
-        private Vector3 homePosition;
-        private float homeYaw;
         private Vector3 homeScale;
-        private Collider[] bodyColliders;
+        private Collider[] allColliders;
         private Renderer[] renderers;
         private MaterialPropertyBlock block;
+        private bool pulling;
+        private Vector3 pullStart;
+        private float scrapeDebt;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly Color Empty = new(0.18f, 0.05f, 0.04f);
         private static readonly Color Full = new(0.35f, 1f, 0.85f);
@@ -53,10 +66,8 @@ namespace CoOpHorror.Gameplay
         {
             base.Awake();
             All.Add(this);
-            homePosition = transform.position;
-            homeYaw = transform.eulerAngles.y;
             homeScale = transform.localScale;
-            bodyColliders = GetComponentsInChildren<Collider>(true);
+            allColliders = GetComponentsInChildren<Collider>(true);
             renderers = GetComponentsInChildren<Renderer>(true);
             block = new MaterialPropertyBlock();
         }
@@ -70,51 +81,72 @@ namespace CoOpHorror.Gameplay
         public override void OnNetworkSpawn()
         {
             base.OnNetworkSpawn();
+            pulling = false;
             if (!IsServer) return;
             // Every new room starts from the scene layout.
             Charge.Value = 0f;
-            Carrier.Value = NoCarrier;
-            Socket.Value = -1;
-            RestPosition.Value = homePosition;
-            RestYaw.Value = homeYaw;
+            Value.Value = BaseValue;
+            StoredBy.Value = NoOwner;
+            StoredSlot.Value = -1;
+            Swallowed.Value = false;
+            Revealed.Value = false;
+            Body.isKinematic = StartsHidden;
+        }
+
+        // Salvage ripped off a fixture: drops out powered, at full value.
+        public void ServerReveal(Pose from)
+        {
+            if (!IsServer || !StartsHidden || Revealed.Value) return;
+            Charge.Value = Capacity;
+            Value.Value = BaseValue;
+            Revealed.Value = true;
+            Body.isKinematic = false;
+            Body.position = from.position;
+            Body.rotation = from.rotation;
+            transform.SetPositionAndRotation(from.position, from.rotation);
+            var sync = GetComponent<Unity.Netcode.Components.NetworkTransform>();
+            if (sync != null && sync.CanCommitToTransform) sync.Teleport(from.position, from.rotation, transform.localScale);
+            Body.linearVelocity = from.forward * 1.2f + Vector3.up * 0.5f;
         }
 
         public override InteractKind Describe(PlayerInteractor who, out string prompt)
         {
-            if (IsPlugged) { prompt = GameText.Format("interact.plugged", DisplayName); return InteractKind.None; }
-            if (IsCarried) { prompt = string.Empty; return InteractKind.None; }
-            if (IsCharged)
+            prompt = string.Empty;
+            if (IsGone || pulling || HeldBy(who)) return InteractKind.None;
+            if (!IsCharged)
             {
-                if (who.Carrying != null) { prompt = GameText.Get("interact.handsFull"); return InteractKind.None; }
-                prompt = GameText.Format("interact.pickUp", DisplayName, BaseValue);
-                return InteractKind.Press;
-            }
-            if (IsStalled)
-            {
-                prompt = GameText.Format("interact.chargeStalled", DisplayName, ChargePercent);
+                if (IsStalled)
+                {
+                    prompt = GameText.Format("interact.chargeStalled", DisplayName, ChargePercent);
+                    return InteractKind.Hold;
+                }
+                var grid = PowerGrid.Instance;
+                if (grid == null || grid.IsEmpty)
+                {
+                    prompt = GameText.Format("interact.noPower", DisplayName, ChargePercent);
+                    return InteractKind.None;
+                }
+                prompt = GameText.Format("interact.charge", DisplayName, ChargePercent);
                 return InteractKind.Hold;
             }
-            var grid = PowerGrid.Instance;
-            if (grid == null || grid.IsEmpty)
-            {
-                prompt = GameText.Format("interact.noPower", DisplayName, ChargePercent);
-                return InteractKind.None;
-            }
-            prompt = GameText.Format("interact.charge", DisplayName, ChargePercent);
-            return InteractKind.Hold;
+            prompt = GrabPrompt(who) + "\n" + GameText.Format("interact.value", Value.Value, BaseValue);
+            return who.HandsFull ? InteractKind.None : InteractKind.Hold;
         }
 
-        // Charging: pulls from the shared grid while the player holds the button. Stalled = nobody progresses.
+        // Uncharged: charge from the shared grid (stalled = nobody progresses). Charged: telekinesis.
         public override bool ServerHold(PlayerInteractor who, float dt)
         {
-            if (IsPlugged || IsCarried || IsCharged) return false;
+            if (IsGone || pulling) return false;
+            if (IsCharged) return ServerGrabTick(who);
             if (IsStalled) return true;
             var grid = PowerGrid.Instance;
             if (grid == null) return false;
             var taken = grid.ServerTake(Mathf.Min(ChargeRate * dt, Capacity - Charge.Value));
             Charge.Value = Mathf.Min(Capacity, Charge.Value + taken);
-            return !IsCharged;
+            return !IsCharged; // charging ends; grabbing needs a new press
         }
+
+        protected override bool CanGrab(PlayerInteractor who) => IsCharged && !IsGone && !pulling;
 
         public override void ServerSkillCheck(PlayerInteractor who, SkillCheckResult result)
         {
@@ -123,102 +155,117 @@ namespace CoOpHorror.Gameplay
             else if (result == SkillCheckResult.Great) Charge.Value = Mathf.Min(Capacity, Charge.Value + Capacity * 0.05f);
         }
 
-        // Pick up.
-        public override void ServerUse(PlayerInteractor who)
+        protected override void ServerImpact(float speed) =>
+            ServerDamage(Mathf.Min(MaxImpactLoss, (speed - ImpactSpeed) * ImpactLossPerSpeed));
+
+        // Server: lose a share of the base value (knocks, monster hits).
+        public void ServerDamage(float share)
         {
-            if (!IsCharged || IsCarried || IsPlugged || who.Carrying != null) return;
-            Carrier.Value = who.NetworkObjectId;
+            if (!IsServer || share <= 0f || Swallowed.Value) return;
+            Value.Value = Mathf.Max(0, Value.Value - Mathf.Max(1, Mathf.RoundToInt(BaseValue * share)));
         }
 
-        public void ServerDrop(PlayerInteractor who)
+        // Server: being dragged across the floor by its cord.
+        public void ServerScrape(float dt)
         {
-            if (!IsServer || Carrier.Value != who.NetworkObjectId) return;
-            var body = who.transform;
-            var eye = who.EyePosition;
-            var forward = Vector3.ProjectOnPlane(body.forward, Vector3.up).normalized;
-            // Do not push it into a wall in front of the player.
-            var distance = 1f;
-            if (Physics.Raycast(eye, forward, out var wall, 1.2f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-                distance = Mathf.Max(0f, wall.distance - 0.45f);
-            var spot = body.position + forward * distance;
-            var feet = body.position.y - 1f;
-            if (Physics.Raycast(spot + Vector3.up * 0.9f, Vector3.down, out var ground, 4f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-                spot.y = ground.point.y;
-            else
-                spot.y = feet;
-            RestPosition.Value = spot;
-            RestYaw.Value = body.eulerAngles.y;
-            Carrier.Value = NoCarrier;
+            if (!IsServer || Swallowed.Value) return;
+            scrapeDebt += BaseValue * ScrapeLossPerSecond * dt;
+            if (scrapeDebt < 1f) return;
+            var loss = Mathf.FloorToInt(scrapeDebt);
+            scrapeDebt -= loss;
+            Value.Value = Mathf.Max(0, Value.Value - loss);
         }
 
-        public void ServerPlug(int socket)
+        public void ServerAccelerate(Vector3 acceleration)
         {
-            if (!IsServer) return;
-            Carrier.Value = NoCarrier;
-            Socket.Value = socket;
+            if (IsServer && !Body.isKinematic) Body.AddForce(acceleration, ForceMode.Acceleration);
         }
 
-        // Blackout after the transmission: every appliance still on the map loses its power.
+        public float Speed => Body != null ? Body.linearVelocity.magnitude : 0f;
+
+        protected override Vector3 BeamTargetLocal => CordAnchor != null ? new Vector3(0f, CordAnchor.localPosition.y, 0f) : base.BeamTargetLocal;
+
+        // Blackout: everything left on the map loses its power and drops.
         public void ServerDischarge()
         {
-            if (IsServer && !IsPlugged) Charge.Value = 0f;
+            if (!IsServer || IsPlugged) return;
+            Charge.Value = 0f;
+            ServerReleaseAll();
         }
 
-        public bool TryGetCarrier(out PlayerInteractor carrier)
+        // Inventory. Only tiny appliances with their plug stowed; the holder must be the only one.
+        public bool CanStore => Tiny && !IsGone && !pulling && (Plug == null || Plug.State.Value == PlugState.Stowed);
+
+        public void ServerStore(PlayerInteractor who, int slot)
         {
-            carrier = null;
-            if (!IsCarried || NetworkManager == null || NetworkManager.SpawnManager == null) return false;
-            if (!NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(Carrier.Value, out var obj)) return false;
-            carrier = obj.GetComponent<PlayerInteractor>();
-            return carrier != null;
+            if (!IsServer || !CanStore) return;
+            ServerReleaseAll();
+            Body.isKinematic = true;
+            StoredSlot.Value = slot;
+            StoredBy.Value = who.NetworkObjectId;
         }
 
-        // Where this appliance is right now on every peer (also used by the host for flying-object hits).
-        public Pose CurrentPose(out float scale, out bool swallowed)
+        public void ServerTakeOut(PlayerInteractor who)
         {
-            scale = 1f;
-            swallowed = false;
-            var transmitter = Transmitter.Instance;
-            if (IsPlugged && transmitter != null)
+            if (!IsServer || StoredBy.Value == NoOwner) return;
+            StoredBy.Value = NoOwner;
+            StoredSlot.Value = -1;
+            Body.isKinematic = false;
+            ServerPlaceAtHold(who);
+        }
+
+        protected override void FixedUpdate()
+        {
+            base.FixedUpdate();
+            if (!IsServer || !IsSpawned) return;
+
+            if (StoredBy.Value != NoOwner)
             {
-                var socket = transmitter.SocketPose(Socket.Value);
-                var t = transmitter.PullProgress;
-                if (t <= 0f) return socket;
-                // Sucked into the transmitter: accelerate toward the mouth, spin and shrink.
-                var eased = t * t;
-                scale = Mathf.Lerp(1f, 0.15f, eased);
-                swallowed = t >= 1f;
-                var spin = Quaternion.Euler(eased * 200f, eased * 540f, 0f);
-                return new Pose(Vector3.Lerp(socket.position, transmitter.MouthPosition, eased), socket.rotation * spin);
+                // Rides along with the owner, invisible.
+                if (NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(StoredBy.Value, out var owner)) Body.position = owner.transform.position;
+                return;
             }
-            if (TryGetCarrier(out var carrier)) return carrier.HoldPose();
-            return new Pose(RestPosition.Value, Quaternion.Euler(0f, RestYaw.Value, 0f));
+
+            var transmitter = Transmitter.Instance;
+            var t = IsPlugged && transmitter != null ? transmitter.PullProgress : 0f;
+            if (t <= 0f || Swallowed.Value) return;
+            if (!pulling)
+            {
+                pulling = true;
+                ServerReleaseAll();
+                pullStart = Body.position;
+                Body.isKinematic = true;
+            }
+            // Yanked along its cord into the transmitter's mouth, accelerating and spinning.
+            var eased = t * t;
+            Body.MovePosition(Vector3.Lerp(pullStart, transmitter.MouthPosition, eased));
+            Body.MoveRotation(Body.rotation * Quaternion.Euler(0f, 540f * Time.fixedDeltaTime * (0.3f + eased), 200f * Time.fixedDeltaTime * eased));
+            if (t >= 1f) Swallowed.Value = true;
         }
 
         private void Update()
         {
             if (!IsSpawned) return; // outside a room it stays where it was
 
-            var pose = CurrentPose(out var scale, out var swallowed);
-            transform.SetPositionAndRotation(pose.position, pose.rotation);
-            transform.localScale = homeScale * scale;
-            foreach (var r in renderers) if (r != null) r.enabled = !swallowed;
-
-            // A carried appliance must not push its carrier's CharacterController or block look rays.
-            foreach (var c in bodyColliders) if (c != null) c.enabled = !IsCarried && !swallowed;
+            var gone = IsGone;
+            var transmitter = Transmitter.Instance;
+            var t = IsPlugged && transmitter != null ? transmitter.PullProgress : 0f;
+            transform.localScale = homeScale * Mathf.Lerp(1f, 0.15f, t * t);
+            foreach (var r in renderers) if (r != null) r.enabled = !gone;
+            foreach (var c in allColliders) if (c != null) c.enabled = !gone;
 
             if (Indicator != null)
             {
-                var t = Mathf.Clamp01(Charge.Value / Capacity);
+                var charge = Mathf.Clamp01(Charge.Value / Capacity);
                 Color color;
                 if (IsStalled) color = Random.value < 0.4f ? new Color(1f, 0.3f, 0.1f) : Empty;
                 else if (IsCharged) color = Color.Lerp(Full, Color.white, Mathf.PingPong(Time.time * 1.5f, 0.35f));
-                else color = Color.Lerp(Empty, new Color(0.9f, 0.75f, 0.1f), t);
+                else color = Color.Lerp(Empty, new Color(0.9f, 0.75f, 0.1f), charge);
                 Indicator.GetPropertyBlock(block);
                 block.SetColor(BaseColor, color);
                 Indicator.SetPropertyBlock(block);
             }
-            if (Glow != null) Glow.enabled = IsCharged && !swallowed;
+            if (Glow != null) Glow.enabled = IsCharged && !gone;
         }
     }
 }

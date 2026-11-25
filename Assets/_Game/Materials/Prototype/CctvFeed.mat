@@ -30,14 +30,20 @@ Material:
     m_Ints: []
     m_Floats:
     - _Aspect: 1.7778
+    - _Corner: 0.14
+    - _Curve: 0.16
+    - _Gain: 1.4
+    - _Grain: 0.07
     - _HalfAngle: 70
-    - _Lines: 220
-    - _Signal: 1
+    - _Lift: 0.55
+    - _Lines: 260
+    - _Signal: 0
     - _SrcAspect: 1.3333
     - _SrcHalfTan: 2.7475
+    - _Static: 0
     - _ZTest: 4
     - _Zoom: 1
     m_Colors:
-    - _Color: {r: 0.72, g: 0.95, b: 0.8, a: 1}
+    - _Color: {r: 0.92, g: 0.95, b: 0.9, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

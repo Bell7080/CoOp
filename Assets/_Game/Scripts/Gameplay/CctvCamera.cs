@@ -9,9 +9,9 @@ namespace CoOpHorror.Gameplay
     // A wall-mounted CCTV camera. Outside players power it once (hold the left button on it or its junction
     // box); from then on it is linked to the ship's CCTV panel. The viewer inside the ship can pan, tilt and
     // zoom it; the host keeps the shared aim so everyone sees the camera head turn. The blackout cuts it off.
-    public sealed class CctvCamera : Interactable
+    // Powered, it can be ripped off and sold (InstalledDevice) — the feed goes dark for good.
+    public sealed class CctvCamera : InstalledDevice
     {
-        public const float ChargeRate = 15f;
         public const float YawLimit = 80f;
         public const float PitchMin = -20f; // looking up (Euler X is positive downward)
         public const float PitchMax = 65f;  // looking down
@@ -21,20 +21,19 @@ namespace CoOpHorror.Gameplay
 
         public string NameKey = "cctv.cam1";
         public int Order;
-        public float Capacity = 6f;
         public float DefaultYaw;
         public float DefaultPitch = 25f;
         public Transform Head;
         public Transform Lens;
         public Renderer Led;
+        public Light Spot;    // the camera's own lamp; lit only while the CCTV view renders through it
+        public Light Fill;    // soft night-vision fill around the camera, also only for the CCTV render
 
-        public readonly NetworkVariable<float> Charge = new(0f);
         public readonly NetworkVariable<float> Yaw = new(0f);
         public readonly NetworkVariable<float> Pitch = new(0f);
 
-        public bool Online => IsSpawned && Charge.Value >= Capacity - 0.01f;
-        public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
-        public string DisplayName => GameText.Get(NameKey);
+        public override string DisplayName => GameText.Get(NameKey);
+        protected override string OnlineLabel => GameText.Format("interact.cctvOnline", DisplayName);
 
         // Local viewer override so the view turns without waiting for the host.
         private bool localAim;
@@ -69,40 +68,11 @@ namespace CoOpHorror.Gameplay
 
         public override void OnNetworkSpawn()
         {
+            base.OnNetworkSpawn();
             localAim = false;
             if (!IsServer) return;
-            Charge.Value = 0f;
             Yaw.Value = DefaultYaw;
             Pitch.Value = DefaultPitch;
-        }
-
-        public override InteractKind Describe(PlayerInteractor who, out string prompt)
-        {
-            if (Online) { prompt = GameText.Format("interact.cctvOnline", DisplayName); return InteractKind.None; }
-            var grid = PowerGrid.Instance;
-            if (grid == null || grid.IsEmpty)
-            {
-                prompt = GameText.Format("interact.cctvNoPower", DisplayName, ChargePercent);
-                return InteractKind.None;
-            }
-            prompt = GameText.Format("interact.cctvCharge", DisplayName, ChargePercent);
-            return InteractKind.Hold;
-        }
-
-        public override bool ServerHold(PlayerInteractor who, float dt)
-        {
-            if (Online) return false;
-            var grid = PowerGrid.Instance;
-            if (grid == null) return false;
-            var taken = grid.ServerTake(Mathf.Min(ChargeRate * dt, Capacity - Charge.Value));
-            Charge.Value = Mathf.Min(Capacity, Charge.Value + taken);
-            return !Online;
-        }
-
-        // Blackout: the camera loses its power like every other device.
-        public void ServerDischarge()
-        {
-            if (IsServer) Charge.Value = 0f;
         }
 
         public float CurrentYaw => localAim ? localYaw : Yaw.Value;
@@ -148,6 +118,7 @@ namespace CoOpHorror.Gameplay
         {
             if (Head != null)
             {
+                Head.gameObject.SetActive(!IsSpawned || !Detached.Value);
                 var target = Quaternion.Euler(IsSpawned ? CurrentPitch : DefaultPitch, IsSpawned ? CurrentYaw : DefaultYaw, 0f);
                 Head.localRotation = localAim ? target : Quaternion.Slerp(Head.localRotation, target, 1f - Mathf.Exp(-10f * Time.deltaTime));
             }
