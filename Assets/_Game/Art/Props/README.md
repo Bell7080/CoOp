@@ -16,6 +16,6 @@ embedded AI-generation markers) from text prompts, H3.1 smart low-poly, and conv
 | `KrTV`, `KrMicrowave`, `KrRadio`, `KrFan`, `KrToaster`, `KrKettle`, `KrRiceCooker` | 1990s Korean home appliances over the collectable appliances (charge LED kept on the front) |
 | `KrKimchiFridge` | kimchi refrigerator in the break room (decoration) |
 | `CctvCam` | wall-mounted CCTV camera on its bracket (static mount; also the ripped-off salvage) |
-| `SettleLift` | the settlement cargo lift (platform, pylon, corner socket housings); converted with `PROP_KEEP_ALL=1` so the tall pylon is not trimmed as a stray strand |
+| `SettleLift` | the old outdoor settlement lift (not used since the 2026-11-26 nose/energy-tank redesign; kept for later) |
 
 `glb_to_prop.py` also strips stray floating pieces that Tripo sometimes leaves around a model.

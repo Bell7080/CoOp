@@ -6,15 +6,19 @@ using UnityEngine.InputSystem;
 
 namespace CoOpHorror.Player
 {
-    // Left mouse button: use what you look at — press, hold (charge, crank) or keep holding to lift it with
-    // telekinesis (sticky: you may look around). Right mouse + mouse while lifting: turn it. Q: drop a plug or
-    // let go of something taken out of the inventory. Space answers skill checks while holding.
-    // The owner only requests; the host checks range, life and target state before anything changes.
+    // Left mouse button: use what you look at — press it, or hold (with the nose: drink an appliance's or a
+    // fixture's power into your tank). Right mouse button held: the nose pumps your tank OUT into it (the ship's
+    // transmitter, or back into an appliance / lamp / camera to switch it on again). A body can still be lifted
+    // with telekinesis (left hold; sticky: you may look around; right mouse + mouse turns it).
+    // Appliances and fixtures right in front of you pull the nose onto them even when the crosshair is a
+    // little off. The owner only requests; the host checks range, life and target state before anything changes.
     public sealed class PlayerInteractor : NetworkBehaviour
     {
         public const float PressOrHoldDelay = 0.28f; // keep the button down this long to grab instead of hit
         public const float TurnSendInterval = 0.05f;
         public const float TurnSensitivity = 0.3f;
+        public const float NoseAssistRange = 2.3f;   // things this close in front catch the nose
+        public const float NoseAssistAngle = 28f;
 
         public enum SkillAutomation { Off, Perfect, Miss }
 
@@ -22,85 +26,34 @@ namespace CoOpHorror.Player
 
         // Owner-side view for the HUD.
         public Interactable Target { get; private set; }
-        public InteractKind TargetKind { get; private set; }
+        public InteractKind TargetKind { get; private set; }        // left button
+        public InteractKind TargetKindRight { get; private set; }   // right button
         public string Prompt { get; private set; } = string.Empty;
         public bool HoldingUse => ownerHold != null;
+        public bool HoldingRight => ownerHold != null && ownerHoldRight;
         public bool RotatingHeld { get; private set; }
         public SkillCheck Check { get; } = new();
 
         // Automation hooks for CLI / end-to-end tests (owner only; real input is unaffected).
         public Interactable AutomationTarget { get; set; }
-        public bool AutomationHold { get; set; }
+        public bool AutomationHold { get; set; }        // left button held
+        public bool AutomationHoldRight { get; set; }   // right button held
         public SkillAutomation AutomationSkill { get; set; }
         public Vector2 AutomationTurn { get; set; }
-        private bool automationPress, automationDrop, automationSkill;
+        private bool automationPress, automationSkill;
         public void AutomationPress() => automationPress = true;
-        public void AutomationDrop() => automationDrop = true;
         public void AutomationSkillPress() => automationSkill = true;
-        public void AutomationPlugKey() => automationPlugKey = true;
-        private bool automationPlugKey;
 
-        // E on an appliance (or a plug): pull the plug out into your hand - also out of a power strip, or out of
-        // the transmitter before the settlement starts. E while carrying a plug: plug it into the transmitter or
-        // the power strip you are looking at, or let it reel back into its appliance.
-        public enum PlugAction : byte { None, Take, Socket, SocketTap, Return }
-
-        public PlugAction PlugKeyAction
-        {
-            get
-            {
-                if (!IsSpawned || !Alive || ownerHold != null) return PlugAction.None;
-                var held = HeldPlug;
-                if (held != null)
-                {
-                    if (Target is Transmitter && TargetKind == InteractKind.Press) return PlugAction.Socket;
-                    if (Target is Appliance tap && tap.Accepts(held)) return PlugAction.SocketTap;
-                    return PlugAction.Return;
-                }
-                return PlugToTake() != null ? PlugAction.Take : PlugAction.None;
-            }
-        }
-
-        private CordPlug PlugToTake()
-        {
-            if (HandsFull) return null;
-            var plug = Target as CordPlug ?? (Target as Appliance)?.Plug;
-            if (plug == null || !plug.IsSpawned || plug.Appliance == null || !plug.Appliance.IsSpawned || plug.Appliance.IsGone) return null;
-            var state = plug.State.Value;
-            if (state == PlugState.Stowed || state == PlugState.Retracting) return plug;
-            // a plugged-in cord: only when the plug itself is within reach
-            var reach = Interactable.UseRange + 0.5f;
-            return state == PlugState.Socketed && plug.CanUnplug && (plug.transform.position - EyePosition).sqrMagnitude <= reach * reach ? plug : null;
-        }
-
-        private bool UsePlugKey()
-        {
-            switch (PlugKeyAction)
-            {
-                case PlugAction.Socket: UseRpc(Target.NetworkObject); return true;
-                case PlugAction.SocketTap: PlugIntoTapRpc(Target.NetworkObject); return true;
-                case PlugAction.Return: DropRpc(); return true;
-                case PlugAction.Take: UseRpc(PlugToTake().NetworkObject); return true;
-                default: return false;
-            }
-        }
-
-        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-        private void PlugIntoTapRpc(NetworkObjectReference reference)
-        {
-            if (!Alive || !reference.TryGet(out var obj) || !obj.TryGetComponent<Appliance>(out var tap) || !tap.ServerInRange(this)) return;
-            var plug = HeldPlug;
-            if (plug != null) tap.ServerAcceptPlug(plug);
-        }
         public int SkillChecksSeen { get; private set; }
         public int SkillChecksMissed { get; private set; }
 
         private FirstPersonController motor;
         private PlayerHealth health;
+        private PlayerNose nose;
         private Interactable ownerHold;   // owner: what we told the host we are holding
+        private bool ownerHoldRight;      // ...with which button
         private bool ownerHoldSticky;
-        private bool ownerHoldLatched;    // taken out of the inventory: held until the next click or Q
-        private bool blockUntilRelease;   // a hold ended while the button is still down
+        private bool blockLeft, blockRight; // a hold ended while that button is still down
         private Interactable pressTarget;
         private float pressTime;
         private Vector2 turnAccumulated;
@@ -110,6 +63,7 @@ namespace CoOpHorror.Player
         private float nextTurnSend;
         private SkillCheck.State lastCheckState;
         private Interactable serverHold;  // host: what this player is holding
+        private bool serverHoldRight;
         private static readonly RaycastHit[] Hits = new RaycastHit[16];
 
         // How fast this player moves (every peer, from the transform): carried loads lag behind it.
@@ -132,9 +86,6 @@ namespace CoOpHorror.Player
         // Where telekinesis holds things: in front of the eyes along the look direction.
         public Vector3 GrabPoint() => EyePosition + AimForward * Grabbable.HoldDistance;
 
-        // Where a carried plug sits: low on the right.
-        public Vector3 HandPoint() => EyePosition + AimRotation * new Vector3(0.28f, -0.32f, 0.45f);
-
         public Grabbable HeldGrabbable
         {
             get
@@ -145,22 +96,13 @@ namespace CoOpHorror.Player
             }
         }
 
-        public CordPlug HeldPlug
-        {
-            get
-            {
-                if (!IsSpawned) return null;
-                foreach (var p in CordPlug.All) if (p != null && p.HeldBy(this)) return p;
-                return null;
-            }
-        }
-
-        public bool HandsFull => HeldGrabbable != null || HeldPlug != null;
+        public bool HandsFull => HeldGrabbable != null;
 
         private void Awake()
         {
             motor = GetComponent<FirstPersonController>();
             health = GetComponent<PlayerHealth>();
+            nose = GetComponent<PlayerNose>();
         }
 
         public override void OnNetworkSpawn()
@@ -185,14 +127,10 @@ namespace CoOpHorror.Player
             if (dead) ServerLetGoOfEverything();
         }
 
-        private void ServerLetGoOfEverything()
+        public void ServerLetGoOfEverything()
         {
             ServerEndHold();
-            var plug = HeldPlug;
-            if (plug != null) plug.ServerDrop(this);
             foreach (var g in Grabbable.All) if (g != null && g.HeldBy(this)) g.ServerHoldEnded(this);
-            var inventory = GetComponent<PlayerInventory>();
-            if (inventory != null) inventory.ServerDropAll();
         }
 
         private bool Alive => health == null || !health.IsDead.Value;
@@ -210,63 +148,56 @@ namespace CoOpHorror.Player
             var k = Keyboard.current;
             var m = Mouse.current;
             var ready = FirstPersonController.GameplayInputReady && Alive;
-            var held = (ready && m != null && m.leftButton.isPressed) || AutomationHold;
+            var heldLeft = (ready && m != null && m.leftButton.isPressed) || AutomationHold;
+            var heldRight = (ready && m != null && m.rightButton.isPressed) || AutomationHoldRight;
             var pressed = (ready && m != null && m.leftButton.wasPressedThisFrame) || automationPress;
-            var drop = (ready && k != null && k.qKey.wasPressedThisFrame) || automationDrop;
             var skill = (ready && k != null && k.spaceKey.wasPressedThisFrame) || automationSkill || AutoSkillPress();
-            var rotate = (ready && m != null && m.rightButton.isPressed) || AutomationTurn != Vector2.zero;
-            var plugKey = (ready && k != null && k.eKey.wasPressedThisFrame && !PlayerReviver.LocalLookingAtBody) || automationPlugKey;
-            automationPress = automationDrop = automationSkill = automationPlugKey = false;
-            if (!held) blockUntilRelease = false;
+            automationPress = automationSkill = false;
+            if (!heldLeft) blockLeft = false;
+            if (!heldRight) blockRight = false;
 
-            var consumed = false;
-            if (plugKey && ownerHold == null) consumed = UsePlugKey();
             if (ownerHold != null)
             {
                 bool keep;
+                var held = ownerHoldRight ? heldRight : heldLeft;
+                var kind = ownerHoldRight ? TargetKindRight : TargetKind;
                 if (!ownerHold.IsSpawned || !Alive) keep = false;
-                else if (ownerHoldLatched)
-                {
-                    keep = !pressed && !drop;
-                    consumed = !keep;
-                }
                 else if (ownerHoldSticky) keep = held;
-                else keep = held && Target == ownerHold && (TargetKind == InteractKind.Hold || TargetKind == InteractKind.PressOrHold);
+                else keep = held && Target == ownerHold && (kind == InteractKind.Hold || kind == InteractKind.PressOrHold);
                 if (!keep) EndOwnerHold();
             }
 
-            if (!consumed && HeldPlug != null && (drop || (pressed && !(Target is Transmitter && TargetKind == InteractKind.Press))))
+            if (ownerHold == null && Target != null)
             {
-                DropRpc();
-                consumed = true;
-            }
-
-            if (ownerHold == null && !consumed && !blockUntilRelease && Target != null)
-            {
-                switch (TargetKind)
+                // right button: pump the tank out into it
+                if (!blockRight && heldRight && TargetKindRight == InteractKind.Hold) BeginOwnerHold(Target, true);
+                else if (!blockLeft)
                 {
-                    case InteractKind.Hold:
-                        if (held) BeginOwnerHold(Target);
-                        break;
-                    case InteractKind.Press:
-                        if (pressed && !Target.OwnerUse(this)) UseRpc(Target.NetworkObject);
-                        break;
-                    case InteractKind.PressOrHold:
-                        if (pressed)
-                        {
-                            UseRpc(Target.NetworkObject);
-                            pressTarget = Target;
-                            pressTime = Time.time;
-                        }
-                        else if (held && pressTarget == Target && Time.time - pressTime >= PressOrHoldDelay)
-                        {
-                            pressTarget = null;
-                            BeginOwnerHold(Target);
-                        }
-                        break;
+                    switch (TargetKind)
+                    {
+                        case InteractKind.Hold:
+                            if (heldLeft) BeginOwnerHold(Target, false);
+                            break;
+                        case InteractKind.Press:
+                            if (pressed && !Target.OwnerUse(this)) UseRpc(Target.NetworkObject);
+                            break;
+                        case InteractKind.PressOrHold:
+                            if (pressed)
+                            {
+                                UseRpc(Target.NetworkObject);
+                                pressTarget = Target;
+                                pressTime = Time.time;
+                            }
+                            else if (heldLeft && pressTarget == Target && Time.time - pressTime >= PressOrHoldDelay)
+                            {
+                                pressTarget = null;
+                                BeginOwnerHold(Target, false);
+                            }
+                            break;
+                    }
                 }
             }
-            if (!held) pressTarget = null;
+            if (!heldLeft) pressTarget = null;
 
             // Resync: the host still has us lifting something we no longer hold here.
             if (ownerHold == null && Time.unscaledTime >= nextResync && HeldGrabbable != null)
@@ -275,9 +206,9 @@ namespace CoOpHorror.Player
                 EndHoldRpc();
             }
 
-            UpdateTurning(rotate, m);
+            UpdateTurning(heldRight || AutomationTurn != Vector2.zero, m);
 
-            var checkHolding = ownerHold != null && ownerHold.UsesSkillChecks;
+            var checkHolding = ownerHold != null && !ownerHoldRight && ownerHold.UsesSkillChecks;
             var result = Check.Tick(checkHolding, skill);
             if (Check.Current == SkillCheck.State.Warning && lastCheckState == SkillCheck.State.Idle) SkillChecksSeen++;
             lastCheckState = Check.Current;
@@ -290,14 +221,13 @@ namespace CoOpHorror.Player
         private bool AutoSkillPress()
         {
             if (AutomationSkill != SkillAutomation.Perfect || Check.Current != SkillCheck.State.Running) return false;
-            // First frame inside the zone (great if the frame rate allows).
             var a = Check.NeedleAngle;
             return a >= Check.ZoneStart + 1f && a <= Check.ZoneStart + SkillCheck.ZoneWidth - 2f;
         }
 
         private void UpdateTurning(bool rotate, Mouse m)
         {
-            RotatingHeld = rotate && ownerHold is Grabbable && ownerHoldSticky;
+            RotatingHeld = rotate && ownerHold is Grabbable && ownerHoldSticky && !ownerHoldRight;
             if (!RotatingHeld)
             {
                 turnAccumulated = Vector2.zero;
@@ -311,21 +241,28 @@ namespace CoOpHorror.Player
             turnAccumulated = Vector2.zero;
         }
 
-        private void BeginOwnerHold(Interactable target)
+        private void BeginOwnerHold(Interactable target, bool right)
         {
             ownerHold = target;
+            ownerHoldRight = right;
             ownerHoldSticky = target.StickyHold;
-            ownerHoldLatched = false;
-            BeginHoldRpc(target.NetworkObject, ++holdSerial);
+            BeginHoldRpc(target.NetworkObject, ++holdSerial, right);
         }
 
         private void EndOwnerHold()
         {
+            var right = ownerHoldRight;
             ownerHold = null;
-            ownerHoldLatched = false;
             EndHoldRpc();
+            BlockWhileDown(right);
+        }
+
+        // The button that ran a hold must be released before it starts another one.
+        private void BlockWhileDown(bool right)
+        {
             var m = Mouse.current;
-            if ((m != null && m.leftButton.isPressed) || AutomationHold) blockUntilRelease = true;
+            if (right) { if ((m != null && m.rightButton.isPressed) || AutomationHoldRight) blockRight = true; }
+            else if ((m != null && m.leftButton.isPressed) || AutomationHold) blockLeft = true;
         }
 
         private void UpdateTarget()
@@ -337,10 +274,10 @@ namespace CoOpHorror.Player
                 var ray = cam != null && cam.transform.IsChildOf(transform)
                     ? cam.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f))
                     : new Ray(EyePosition, AimForward);
-                // Collide with triggers too: plugs are triggers. Things we carry do not block the view.
+                // Things we carry do not block the view.
                 var count = Physics.RaycastNonAlloc(ray, Hits, Interactable.UseRange, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide);
                 var nearest = float.MaxValue;
-                var carried = (Interactable)HeldGrabbable ?? HeldPlug;
+                var carried = HeldGrabbable;
                 for (var i = 0; i < count; i++)
                 {
                     var c = Hits[i].collider;
@@ -352,35 +289,55 @@ namespace CoOpHorror.Player
                     nearest = Hits[i].distance;
                     found = interactable; // a wall or player in front blocks
                 }
+                if (found == null) found = NoseAssist(ray, nearest);
             }
             if (found != null && !found.IsSpawned) found = null;
 
             Target = found;
             var prompt = string.Empty;
+            var promptRight = string.Empty;
             TargetKind = found != null && Alive ? found.Describe(this, out prompt) : InteractKind.None;
+            TargetKindRight = found != null && Alive ? found.DescribeRight(this, out promptRight) : InteractKind.None;
+            if (!string.IsNullOrEmpty(promptRight)) prompt = string.IsNullOrEmpty(prompt) ? promptRight : prompt + "\n" + promptRight;
             var carrying = CarryingPrompt();
             if (!string.IsNullOrEmpty(carrying))
             {
                 // While lifting something the target does not matter.
-                if (ownerHoldSticky && ownerHold != null) prompt = carrying;
+                if (ownerHoldSticky && ownerHold is Grabbable) prompt = carrying;
                 else prompt = string.IsNullOrEmpty(prompt) ? carrying : prompt + "\n" + carrying;
             }
             Prompt = prompt ?? string.Empty;
         }
 
+        // The nose finds an appliance or fixture right in front of you (within reach, in a narrow cone, in plain
+        // sight) even when the crosshair is just off it.
+        private Interactable NoseAssist(Ray ray, float blockedAt)
+        {
+            Interactable best = null;
+            var bestScore = float.MaxValue;
+            void Consider(Interactable target, INoseTarget nosed)
+            {
+                var point = nosed.NosePoint(ray.origin);
+                var offset = point - ray.origin;
+                var distance = offset.magnitude;
+                if (distance > NoseAssistRange || distance >= blockedAt + 0.3f || distance < 0.01f) return;
+                var angle = Vector3.Angle(ray.direction, offset);
+                if (angle > NoseAssistAngle) return;
+                if (Physics.Raycast(ray.origin, offset / distance, out var hit, distance - 0.05f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                    && !hit.collider.transform.IsChildOf(target.transform) && !hit.collider.transform.IsChildOf(transform)) return;
+                var score = angle + distance * 4f;
+                if (score < bestScore) { bestScore = score; best = target; }
+            }
+            foreach (var a in Appliance.All) if (a != null && a.IsSpawned) Consider(a, a);
+            foreach (var d in InstalledDevice.Devices) if (d != null && d.IsSpawned) Consider(d, d);
+            return best;
+        }
+
         private string CarryingPrompt()
         {
-            var plug = HeldPlug;
-            if (plug != null) return GameText.Format("interact.carryingPlug", plug.DisplayName, plug.Stretch.ToString("0.0"), plug.Length.ToString("0"));
             var held = HeldGrabbable;
             if (held == null) return string.Empty;
-            var line = GameText.Format(ownerHoldLatched ? "interact.carryingLatched" : "interact.carrying", held.DisplayName, held.Holders.Count, held.Weight);
-            if (held is Appliance appliance)
-            {
-                line += "\n" + GameText.Format("interact.value", appliance.Value.Value, appliance.BaseValue);
-                if (appliance.CanStore) line += " · " + GameText.Get("interact.canStore");
-            }
-            return line;
+            return GameText.Format("interact.carrying", held.DisplayName, held.Holders.Count, held.Weight);
         }
 
         // ---------- host ----------
@@ -388,8 +345,16 @@ namespace CoOpHorror.Player
         private void ServerTickHold()
         {
             if (serverHold == null) return;
-            if (!Alive || !serverHold.IsSpawned || !serverHold.ServerInRange(this, serverHold.HoldRange) || !serverHold.ServerHold(this, Time.deltaTime))
-                ServerForceEndHold(serverHold);
+            var ok = Alive && serverHold.IsSpawned && serverHold.ServerInRange(this, serverHold.HoldRange)
+                && (serverHoldRight ? serverHold.ServerHoldRight(this, Time.deltaTime) : serverHold.ServerHold(this, Time.deltaTime));
+            if (!ok) ServerForceEndHold(serverHold);
+        }
+
+        private void ServerStartHold(Interactable target, bool right)
+        {
+            serverHold = target;
+            serverHoldRight = right;
+            if (nose != null && target is INoseTarget) nose.ServerAttach(target.NetworkObject, PlayerNose.FlowNone);
         }
 
         private void ServerEndHold()
@@ -397,25 +362,16 @@ namespace CoOpHorror.Player
             if (serverHold == null) return;
             var ended = serverHold;
             serverHold = null;
+            if (nose != null && ended is INoseTarget) nose.ServerDetach();
             ended.ServerHoldEnded(this);
         }
 
-        // Host ended a hold on its own (charged, out of range, stuck): tell the owner.
+        // Host ended a hold on its own (drained, full, out of range, stuck): tell the owner.
         public void ServerForceEndHold(Interactable target)
         {
             if (serverHold != target || target == null) return;
             ServerEndHold();
             HoldEndedRpc(target.NetworkObject, serverHoldSerial);
-        }
-
-        // Host: start a hold without a button press (inventory take-out). Held until the next click or Q.
-        public void ServerBeginLatchedHold(Grabbable target)
-        {
-            ServerEndHold();
-            if (!target.ServerHold(this, 0f)) return;
-            serverHold = target;
-            serverHoldSerial = -1;
-            LatchHoldRpc(target.NetworkObject);
         }
 
         private bool TryResolve(NetworkObjectReference reference, out Interactable target)
@@ -427,11 +383,11 @@ namespace CoOpHorror.Player
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-        private void BeginHoldRpc(NetworkObjectReference reference, int serial)
+        private void BeginHoldRpc(NetworkObjectReference reference, int serial, bool right)
         {
             ServerEndHold();
             serverHoldSerial = serial;
-            if (TryResolve(reference, out var target)) serverHold = target;
+            if (TryResolve(reference, out var target)) ServerStartHold(target, right);
             else if (reference.TryGet(out var obj)) HoldEndedRpc(obj, serial);
         }
 
@@ -448,42 +404,25 @@ namespace CoOpHorror.Player
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
         private void SkillCheckRpc(NetworkObjectReference reference, SkillCheckResult result)
         {
-            if (serverHold == null || !reference.TryGet(out var obj) || obj != serverHold.NetworkObject) return;
+            if (serverHold == null || serverHoldRight || !reference.TryGet(out var obj) || obj != serverHold.NetworkObject) return;
             if (serverHold.UsesSkillChecks) serverHold.ServerSkillCheck(this, result);
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
         private void TurnRpc(float yaw, float pitch)
         {
-            if (serverHold is Grabbable grabbable) grabbable.ServerTurn(this, yaw, pitch);
-        }
-
-        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-        private void DropRpc()
-        {
-            var plug = HeldPlug;
-            if (plug != null) plug.ServerDrop(this);
+            if (serverHold is Grabbable grabbable && !serverHoldRight) grabbable.ServerTurn(this, yaw, pitch);
         }
 
         [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Server)]
         private void HoldEndedRpc(NetworkObjectReference reference, int serial)
         {
-            // Ignore a late notice about an older hold (-1 = a latched inventory hold).
+            // Ignore a late notice about an older hold.
             if (ownerHold == null || !reference.TryGet(out var obj) || obj != ownerHold.NetworkObject) return;
-            if (serial >= 0 && serial != holdSerial) return;
+            if (serial != holdSerial) return;
+            var right = ownerHoldRight;
             ownerHold = null;
-            ownerHoldLatched = false;
-            var m = Mouse.current;
-            if ((m != null && m.leftButton.isPressed) || AutomationHold) blockUntilRelease = true;
-        }
-
-        [Rpc(SendTo.Owner, InvokePermission = RpcInvokePermission.Server)]
-        private void LatchHoldRpc(NetworkObjectReference reference)
-        {
-            if (!reference.TryGet(out var obj) || !obj.TryGetComponent<Interactable>(out var target)) return;
-            ownerHold = target;
-            ownerHoldSticky = true;
-            ownerHoldLatched = true;
+            BlockWhileDown(right);
         }
     }
 }

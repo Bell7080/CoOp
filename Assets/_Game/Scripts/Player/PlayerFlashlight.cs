@@ -5,13 +5,11 @@ using UnityEngine.InputSystem;
 
 namespace CoOpHorror.Player
 {
-    // F toggles the flashlight. It draws a little from the shared grid while on and switches off at 0%.
-    // Players left behind by the ship lose the link to its power. On/off is host-written.
+    // F toggles the flashlight (free: there is no shared power any more). Players left behind by the ship
+    // lose it. On/off is host-written.
     public sealed class PlayerFlashlight : NetworkBehaviour
     {
-        public const float DrainPerSecond = 0.15f;
-        public const float LowPowerFraction = 0.1f;
-        public const float BeamIntensity = 24f;
+        public const float BeamIntensity = 6.5f;   // weak on purpose: upgrades will bring it back up later
 
         public readonly NetworkVariable<bool> On = new(false);
 
@@ -30,9 +28,9 @@ namespace CoOpHorror.Player
             beam = go.AddComponent<Light>();
             beam.type = LightType.Spot;
             beam.color = new Color(1f, 0.95f, 0.82f);
-            beam.range = 45f;
-            beam.spotAngle = 78f;
-            beam.innerSpotAngle = 40f;
+            beam.range = 15f;
+            beam.spotAngle = 62f;
+            beam.innerSpotAngle = 30f;
             beam.intensity = BeamIntensity;
             beam.shadows = LightShadows.None;
             beam.enabled = false;
@@ -68,13 +66,11 @@ namespace CoOpHorror.Player
             if (IsOwner && FirstPersonController.GameplayInputReady && !Dead && Keyboard.current != null && Keyboard.current.fKey.wasPressedThisFrame)
                 ToggleRpc();
 
-            var grid = PowerGrid.Instance;
             if (IsServer && On.Value)
             {
                 var stage = StageDirector.Instance;
-                // Stays on even when the grid runs dry (just dimmer); only death or being left behind turns it off.
+                // Only death or being left behind turns it off.
                 if (Dead || (stage != null && stage.IsLeftBehind(health))) On.Value = false;
-                else if (grid != null) grid.ServerTake(DrainPerSecond * Time.deltaTime);
             }
 
             if (IsOwner)
@@ -90,16 +86,13 @@ namespace CoOpHorror.Player
             }
             beam.enabled = On.Value;
             if (!beam.enabled) return;
-            // Steady beam; a little dimmer when the shared grid is (nearly) empty. No flicker.
-            var low = grid != null && grid.IsSpawned && grid.Fraction < LowPowerFraction;
-            beam.intensity = low ? BeamIntensity * 0.65f : BeamIntensity;
+            beam.intensity = BeamIntensity;
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
         private void ToggleRpc()
         {
             if (Dead) return;
-            var grid = PowerGrid.Instance;
             var stage = StageDirector.Instance;
             if (!On.Value && stage != null && stage.IsLeftBehind(health)) return;
             On.Value = !On.Value;

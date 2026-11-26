@@ -21,6 +21,23 @@ namespace CoOpHorror.Gameplay
 
         public Renderer BodyRenderer;
         public Renderer HeadRenderer;
+        public Transform Model;          // the slumped mole (presentation; flops around)
+        public Transform Blood;          // the pool it left: stays on the floor where it died
+
+        // Floppy corpse (presentation only): lying, the lump sags flat and its limbs splay; lifted, it hangs
+        // and stretches under its own weight, drags behind its motion, and its head, arms, legs and nose droop
+        // toward the ground; hitting the floor squashes it. Thick, slow springs: a heavy, viscous body.
+        private static readonly Vector3 LyingScale = new(1.25f, 0.42f, 1.2f);
+        private static readonly Vector3 HangingScale = new(0.82f, 1.15f, 0.82f);
+        private static readonly string[] DroopBones = { "Head", "Nose1", "ArmL1", "ArmL2", "ArmR1", "ArmR2", "LegL", "LegR" };
+        private Transform[] droop;
+        private Quaternion[] droopBind;
+        private Vector3 scale, scaleVelocity, lastPosition, lastVelocity, lean, leanVelocity;
+        private float hang, droopAmount;
+        private Vector3 bloodHome;
+        private Quaternion bloodRotation;
+        private Quaternion modelBaseRotation;
+        private Vector3 modelBasePosition;
 
         public readonly NetworkVariable<ulong> PlayerObjectId = new(NoPlayer);
         public readonly NetworkVariable<ulong> PlayerClientId = new(0);
@@ -37,6 +54,27 @@ namespace CoOpHorror.Gameplay
             base.Awake();
             Bodies.Add(this);
             block = new MaterialPropertyBlock();
+            scale = LyingScale;
+            if (Model != null)
+            {
+                modelBaseRotation = Model.localRotation;
+                modelBasePosition = Model.localPosition;
+                var list = new List<Transform>();
+                foreach (var name in DroopBones)
+                    foreach (var t in Model.GetComponentsInChildren<Transform>(true))
+                        if (t.name == name) { list.Add(t); break; }
+                droop = list.ToArray();
+                droopBind = new Quaternion[droop.Length];
+                for (var i = 0; i < droop.Length; i++) droopBind[i] = droop[i].localRotation;
+            }
+        }
+
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            // the pool stays where the player fell
+            if (Blood != null) { bloodHome = Blood.position; bloodRotation = Blood.rotation; }
+            lastPosition = transform.position;
         }
 
         public override void OnDestroy()
@@ -87,6 +125,49 @@ namespace CoOpHorror.Gameplay
         {
             flashUntil = Time.time + 0.15f;
             ProtoAudio.Play(ProtoSound.Zap, transform.position, 0.7f);
+        }
+
+        protected override void LateUpdate()
+        {
+            base.LateUpdate();
+            if (!IsSpawned) return;
+            if (Blood != null) Blood.SetPositionAndRotation(bloodHome, bloodRotation);
+            if (Model == null) return;
+            var dt = Mathf.Max(Time.deltaTime, 0.0001f);
+            var velocity = (transform.position - lastPosition) / dt;
+            lastPosition = transform.position;
+            if (velocity.sqrMagnitude > 400f) velocity = Vector3.zero; // teleports
+            var accel = (velocity - lastVelocity) / dt;
+            lastVelocity = velocity;
+
+            hang = Mathf.MoveTowards(hang, IsHeld ? 1f : 0f, dt * 2.5f);
+            var target = Vector3.Lerp(LyingScale, HangingScale, hang);
+            // landing hard: a squash that oozes back
+            if (accel.y > 25f) scaleVelocity += new Vector3(1.2f, -2.5f, 1.2f) * Mathf.Clamp01(accel.y / 120f);
+            // viscous spring (over-damped)
+            scaleVelocity += (target - scale) * (60f * dt) - scaleVelocity * Mathf.Min(1f, 12f * dt);
+            scale += scaleVelocity * dt;
+            Model.localScale = scale;
+            // hanging: it dangles below the hold point and trails behind its motion
+            var flat = new Vector3(velocity.x, 0f, velocity.z);
+            var leanTarget = new Vector3(Mathf.Clamp(flat.z * 6f, -25f, 25f), 0f, Mathf.Clamp(-flat.x * 6f, -25f, 25f)) * hang;
+            lean = Vector3.SmoothDamp(lean, leanTarget, ref leanVelocity, 0.35f);
+            Model.localRotation = Quaternion.Inverse(transform.rotation) * Quaternion.Euler(lean.x, 0f, lean.z) * transform.rotation * modelBaseRotation;
+            Model.localPosition = modelBasePosition + Vector3.down * (0.35f * hang);
+
+            // head, arms, legs and nose sag toward the ground (more when lifted)
+            droopAmount = Mathf.MoveTowards(droopAmount, Mathf.Lerp(0.45f, 0.85f, hang), dt * 1.5f);
+            if (droop == null) return;
+            for (var i = 0; i < droop.Length; i++)
+            {
+                var bone = droop[i];
+                if (bone == null) continue;
+                bone.localRotation = droopBind[i];
+                var tip = bone.childCount > 0 ? bone.GetChild(0).position - bone.position : bone.up;
+                if (tip.sqrMagnitude < 1e-6f) continue;
+                var toDown = Quaternion.FromToRotation(tip, Vector3.down);
+                bone.rotation = Quaternion.Slerp(Quaternion.identity, toDown, droopAmount) * bone.rotation;
+            }
         }
 
         private void Update()

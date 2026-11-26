@@ -16,10 +16,9 @@ namespace CoOpHorror.Gameplay
         private readonly AudioSource[] voices = new AudioSource[VoiceCount];
         private readonly AudioLowPassFilter[] filters = new AudioLowPassFilter[VoiceCount];
         private readonly float[] ends = new float[VoiceCount];
-        private readonly float[] lastEvent = new float[35];
+        private readonly float[] lastEvent = new float[System.Enum.GetValues(typeof(ProtoSound)).Length];
         private readonly AudioSource[] loops = new AudioSource[4];
-        private Generator generator;
-        private float nextStinger, duckUntil, nextLookup;
+        private float nextStinger, duckUntil;
         private bool wasInRoom;
 
         private AudioSource Source(string label)
@@ -52,7 +51,7 @@ namespace CoOpHorror.Gameplay
             var clip=ProtoAudio.Clip(sound); var camera=Camera.main;
             if(clip==null||camera==null||volume<=0f)return;
             var distance=Vector3.Distance(position,camera.transform.position);
-            if(distance>30f)return;
+            if(distance>30f&&sound!=ProtoSound.TransmitterFull)return;
             // Avoid piles of identical network/physics events becoming a wall of noise.
             var index=(int)sound;
             if(Time.unscaledTime-lastEvent[index]<0.045f)return;
@@ -68,10 +67,11 @@ namespace CoOpHorror.Gameplay
             var stinger=index>=(int)ProtoSound.StingerMetal&&index<=(int)ProtoSound.StingerBreath;
             var creature=index>=(int)ProtoSound.MonsterNotice&&index<=(int)ProtoSound.MonsterHit;
             source.minDistance=stinger?6f:creature?3.5f:1.5f;
-            source.clip=clip;source.pitch=Mathf.Clamp(pitch,0.55f,1.7f);source.spatialBlend=distance<0.65f?0f:1f;
+            source.clip=clip;source.pitch=Mathf.Clamp(pitch,0.55f,1.7f);var global=sound==ProtoSound.TransmitterFull; // the quest-complete chime is heard by everyone, everywhere
+            source.spatialBlend=global||distance<0.65f?0f:1f;
             source.volume=Mathf.Clamp01(volume)*0.68f;
             filters[slot].cutoffFrequency=22000f;
-            if(distance>2f&&Physics.Linecast(position,camera.transform.position,out var hit,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore)
+            if(!global&&distance>2f&&Physics.Linecast(position,camera.transform.position,out var hit,Physics.DefaultRaycastLayers,QueryTriggerInteraction.Ignore)
                 &&hit.collider.GetComponentInParent<PlayerHealth>()==null)
             {source.volume*=0.5f;filters[slot].cutoffFrequency=1800f;}
             ends[slot]=Time.unscaledTime+clip.length/source.pitch;source.Play();
@@ -103,9 +103,7 @@ namespace CoOpHorror.Gameplay
             var alive=!player.IsDead.Value;
             Loop(0,(cabin?0.07f:0.14f)*duck*(alive?1f:0.4f),at);
             Loop(1,cabin?0.085f*duck:0f,at);
-            if(generator==null&&Time.unscaledTime>=nextLookup){nextLookup=Time.unscaledTime+2f;generator=FindFirstObjectByType<Generator>();}
-            var cranking=generator!=null&&generator.IsSpawned&&generator.Crankers.Value>0&&!generator.IsStalled;
-            Loop(2,cranking?0.22f:0f,generator!=null?generator.transform.position:at);
+            Loop(2,0f,at); // (the ship's generator is gone)
             Grabbable nearest=null;var best=15f*15f;
             foreach(var item in Grabbable.All)
             {

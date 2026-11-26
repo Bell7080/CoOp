@@ -2,10 +2,8 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // The ship's interior lights follow the shared power grid in steps: dark below 30 %, then 30 / 50 / 70 /
-    // 100 % brightness as the grid fills (and back down as it drains). Changes fade in and out over a second
-    // or so, with a short flicker when a step is crossed. Runs on every peer from the replicated grid level;
-    // presentation only.
+    // The ship's interior lights: after the crash-landing opening (CrashIntro) they fade up to full and stay
+    // there (there is no shared power grid any more). Presentation only.
     public sealed class ShipLighting : MonoBehaviour
     {
         public Light[] Lights;
@@ -35,8 +33,7 @@ namespace CoOpHorror.Gameplay
 
         private void Update()
         {
-            var grid = PowerGrid.Instance;
-            var step = grid != null && grid.IsSpawned ? StepFor(grid.Fraction) : 0f;
+            var step = 1f;
             if (!Mathf.Approximately(step, lastStep))
             {
                 if (lastStep >= 0f) flickerUntil = Time.time + 0.35f;

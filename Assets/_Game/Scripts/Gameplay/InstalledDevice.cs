@@ -6,40 +6,35 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // A fixture mounted in the level (CCTV camera, ceiling lamp). Hold the left button to feed it shared power;
-    // once it works, holding the left button on it again rips it off its mount. That takes a while (several
-    // players are faster), makes some noise, switches it off for good and drops its salvage: a charged,
-    // sellable item with a battery cable (a hidden Appliance placed with it) that plugs into the transmitter.
-    public abstract class InstalledDevice : Interactable, IChargeGauge
+    // A fixture mounted in the level (CCTV camera, ceiling lamp). Every one is on when the stage starts and
+    // holds some power (Watts). Holding the left button on it latches the nose on and drinks that power into
+    // the tank at the same flat rate as appliances: the fixture weakens as it drains (a lamp dims, a camera's
+    // feed fills with static) and dies when it is empty. Holding the right button pumps power back in from the
+    // tank and brings it back. The blackout empties everything still left.
+    public abstract class InstalledDevice : Interactable, IChargeGauge, INoseTarget
     {
-        public const float ChargeRate = 6f;
-        public const float DetachNoiseRadius = 7f;
-
         public static readonly List<InstalledDevice> Devices = new();
 
-        public float Capacity = 6f;
-        public float DetachSeconds = 4f;
-        public Appliance Salvage;         // revealed when ripped off
-        public Transform SalvageSpawn;    // where the salvage drops from
+        public int Watts = 60;
+        public bool StartsOn = true;      // off fixtures start empty (give them power with the right button)
 
-        public readonly NetworkVariable<float> Charge = new(0f);
-        public readonly NetworkVariable<bool> Detached = new(false);
-        public readonly NetworkVariable<float> DetachProgress = new(0f);
+        public readonly NetworkVariable<float> Power = new(0f);
 
-        public bool Online => IsSpawned && !Detached.Value && Charge.Value >= Capacity - 0.01f;
-        public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
-        public float GaugeFraction => IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
+        public bool Online => IsSpawned && Power.Value > 0.5f;
+        public float Fraction => IsSpawned && Watts > 0 ? Mathf.Clamp01(Power.Value / Watts) : 1f;
+        public int Remaining => IsSpawned ? Mathf.CeilToInt(Power.Value - 0.01f) : Watts;
+        public float GaugeFraction => Fraction;
         public bool GaugeCharging => false;
-        public int DetachPercent => Mathf.FloorToInt(Mathf.Clamp01(DetachProgress.Value) * 100f);
+        public override bool StickyHold => true;   // the nose stays latched while you look around
         public abstract string DisplayName { get; }
 
-        // Extra line while it works (e.g. "linked to the ship's panel").
-        protected virtual string OnlineLabel => GameText.Format("interact.deviceOnline", DisplayName);
+        private Collider mainCollider;
 
         protected override void Awake()
         {
             base.Awake();
             Devices.Add(this);
+            foreach (var c in GetComponentsInChildren<Collider>(true)) if (!c.isTrigger) { mainCollider = c; break; }
         }
 
         public override void OnDestroy()
@@ -50,66 +45,70 @@ namespace CoOpHorror.Gameplay
 
         public override void OnNetworkSpawn()
         {
-            if (!IsServer) return;
-            Charge.Value = 0f;
-            Detached.Value = false;
-            DetachProgress.Value = 0f;
+            if (IsServer) Power.Value = StartsOn ? Watts : 0f;
+        }
+
+        public override string HoverInfo(PlayerInteractor who)
+        {
+            if (!IsSpawned) return string.Empty;
+            return DisplayName + "\n" + (Online ? GameText.Format("hover.watts", Remaining, Watts) : GameText.Get("hover.drained"));
         }
 
         public override InteractKind Describe(PlayerInteractor who, out string prompt)
         {
-            if (Detached.Value)
+            if (!Online)
             {
-                prompt = GameText.Format("interact.deviceDetached", DisplayName);
+                prompt = GameText.Format("interact.drained", DisplayName);
                 return InteractKind.None;
             }
-            if (Online)
-            {
-                prompt = OnlineLabel + "\n" + GameText.Format("interact.deviceDetach", DisplayName, DetachPercent);
-                return who.HandsFull ? InteractKind.None : InteractKind.Hold;
-            }
-            var grid = PowerGrid.Instance;
-            if (grid == null || grid.IsEmpty)
-            {
-                prompt = GameText.Format("interact.deviceNoPower", DisplayName, ChargePercent);
-                return InteractKind.None;
-            }
-            prompt = GameText.Format("interact.deviceCharge", DisplayName, ChargePercent);
+            prompt = GameText.Format("interact.suck", DisplayName, Remaining);
             return InteractKind.Hold;
         }
 
+        // The nose drinks the fixture's power.
         public override bool ServerHold(PlayerInteractor who, float dt)
         {
-            if (Detached.Value) return false;
-            if (Online)
-            {
-                // Ripping it off; every player on it adds progress.
-                DetachProgress.Value = Mathf.Min(1f, DetachProgress.Value + dt / DetachSeconds);
-                if (DetachProgress.Value < 1f) return true;
-                ServerDetach();
-                return false;
-            }
-            var grid = PowerGrid.Instance;
-            if (grid == null) return false;
-            var taken = grid.ServerTake(Mathf.Min(ChargeRate * dt, Capacity - Charge.Value));
-            Charge.Value = Mathf.Min(Capacity, Charge.Value + taken);
-            return !Online; // powering ends; ripping off needs a new press
+            if (!Online) return false;
+            var nose = who.GetComponent<PlayerNose>();
+            if (nose == null) return false;
+            var taken = nose.ServerAdd(Mathf.Min(PlayerNose.SuckRate * dt, Power.Value));
+            Power.Value = Mathf.Max(0f, Power.Value - taken);
+            nose.ServerSetFlow(taken > 0f ? PlayerNose.FlowIn : PlayerNose.FlowNone);
+            if (!Online) { Power.Value = 0f; return false; }
+            return true;
         }
 
-        private void ServerDetach()
+        // Right button: the nose pumps power back in from the tank (switches it on again).
+        public override InteractKind DescribeRight(PlayerInteractor who, out string prompt)
         {
-            Detached.Value = true;
-            Charge.Value = 0f;
-            Noise.Emit(transform.position, DetachNoiseRadius);
-            if (Salvage == null) return;
-            var from = SalvageSpawn != null ? SalvageSpawn : transform;
-            Salvage.ServerReveal(new Pose(from.position, from.rotation));
+            prompt = string.Empty;
+            if (!IsSpawned || Power.Value >= Watts - 0.5f) return InteractKind.None;
+            var nose = who.GetComponent<PlayerNose>();
+            if (nose == null || nose.Energy.Value < 0.5f) return InteractKind.None;
+            prompt = GameText.Format("interact.giveBack", DisplayName, Remaining, Watts);
+            return InteractKind.Hold;
         }
 
-        // Blackout: everything still mounted loses its power.
+        public override bool ServerHoldRight(PlayerInteractor who, float dt)
+        {
+            var nose = who.GetComponent<PlayerNose>();
+            if (nose == null || Power.Value >= Watts - 0.01f) return false;
+            var given = nose.ServerTake(Mathf.Min(PlayerNose.SuckRate * dt, Watts - Power.Value));
+            Power.Value = Mathf.Min(Watts, Power.Value + given);
+            nose.ServerSetFlow(given > 0f ? PlayerNose.FlowOut : PlayerNose.FlowNone);
+            return Power.Value < Watts - 0.01f && nose.Energy.Value > 0.01f;
+        }
+
+        // Blackout: everything still holding power loses it.
         public void ServerDischarge()
         {
-            if (IsServer && !Detached.Value) Charge.Value = 0f;
+            if (IsServer) Power.Value = 0f;
+        }
+
+        public Vector3 NosePoint(Vector3 from)
+        {
+            if (mainCollider == null || !mainCollider.enabled) return transform.position;
+            return Vector3.Lerp(mainCollider.ClosestPoint(from), mainCollider.bounds.center, 0.1f);
         }
     }
 }

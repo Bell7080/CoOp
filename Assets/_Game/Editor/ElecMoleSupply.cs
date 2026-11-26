@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CoOpHorror.Editor
 {
-    // Item support: a supply terminal in the ship (buy items with the team's money) and the supply station against the
+    // Item support: a supply terminal in the ship (buy items with watts from your energy tank) and the supply station against the
     // dorm's west wall, where the people outside pick them up.
     public static partial class ElecMolePrototypeSetup
     {
@@ -15,62 +15,8 @@ namespace CoOpHorror.Editor
 
         private static void BuildSupply()
         {
-            var station = BuildSupplyStation(SupplyStationPosition, SupplyStationYaw);
+            BuildSupplyStation(SupplyStationPosition, SupplyStationYaw);
             BuildSupplyKiosk(SupplyKioskPosition, SupplyKioskYaw);
-            // power strips sold at the terminal: two of each size wait hidden by the station until delivered
-            var pool = new List<Appliance>();
-            var k = 0;
-            foreach (var outlets in new[] { 2, 3, 5, 8 })
-                for (var copy = 0; copy < 2; copy++, k++)
-                    pool.Add(BuildMultitap(outlets, copy, SupplyStationPosition + new Vector3(1.2f, 0f, -2f + k * 0.5f)));
-            station.TapPool = pool.ToArray();
-        }
-
-        // A power strip (멀티탭, tools/blender/make_multitap.py): a tiny appliance worth nothing itself, already
-        // powered when it is delivered, with N outlets other plugs go into and its own cord for the transmitter.
-        private static Appliance BuildMultitap(int outlets, int copy, Vector3 position)
-        {
-            var name = $"Multitap{outlets}_{copy}";
-            var root = NetRoot("Appliance_" + name, position, 0f);
-            var source = PropModel(ShipProp("Multitap" + outlets));
-            var size = new Vector3(outlets * 0.075f + 0.15f, 0.06f, 0.062f);
-            if (source != null)
-            {
-                var probe = (GameObject)Object.Instantiate(source);
-                size = Bounds(probe).size;
-                Object.DestroyImmediate(probe);
-            }
-            var model = Dress(root.transform, ShipProp("Multitap" + outlets), Vector3.zero, size, 0f, true);
-            var outletList = new Transform[outlets];
-            if (model != null)
-            {
-                foreach (var t in model.GetComponentsInChildren<Transform>())
-                    if (t.name.StartsWith("Outlet_") && int.TryParse(t.name.Substring(7), out var i) && i >= 0 && i < outlets) outletList[i] = t;
-                foreach (var r in model.GetComponentsInChildren<Renderer>())
-                {
-                    var mats = r.sharedMaterials;
-                    for (var m = 0; m < mats.Length; m++)
-                    {
-                        var n = mats[m] != null ? mats[m].name : string.Empty;
-                        mats[m] = n.Contains("Switch") ? Mat("TapSwitch", new Color(0.7f, 0.08f, 0.06f))
-                            : n.Contains("Hole") ? Mat("TapHole", new Color(0.03f, 0.03f, 0.03f))
-                            : n.Contains("Face") ? Mat("TapFace", new Color(0.62f, 0.61f, 0.57f))
-                            : Mat("TapShell", new Color(0.72f, 0.71f, 0.66f));
-                    }
-                    r.sharedMaterials = mats;
-                }
-            }
-            var collider = root.AddComponent<BoxCollider>();
-            collider.center = new Vector3(0f, Mathf.Max(size.y, 0.07f) / 2f, 0f);
-            collider.size = new Vector3(size.x, Mathf.Max(size.y, 0.07f), Mathf.Max(size.z, 0.08f));
-            // charge light kept inside the shell (a strip needs no charging, so nothing to show)
-            var indicator = Shape(root.transform, "Indicator", PrimitiveType.Cube, new Vector3(0f, 0.02f, 0f), Vector3.zero, Vector3.one * 0.01f, Mat("Indicator", Color.white, unlit: true));
-            indicator.GetComponent<Renderer>().enabled = false;
-            var anchor = new Vector3(-size.x / 2f + 0.01f, 0.02f, 0f); // the cord leaves at the tail end
-            var tap = FinishAppliance(root, name, "appliance.multitap" + outlets, 1f, 0, 1, true, 5f, anchor, indicator.GetComponent<Renderer>(), 0.06f);
-            tap.StartsHidden = true;
-            tap.Outlets = outletList;
-            return tap;
         }
 
         private static SupplyStation BuildSupplyStation(Vector3 position, float yaw)
@@ -121,11 +67,6 @@ namespace CoOpHorror.Editor
             foreach (var c in battery.GetComponentsInChildren<Collider>()) Object.DestroyImmediate(c);
             medkit.SetActive(false);
             battery.SetActive(false);
-            // a taped parcel on the tray for power strip deliveries
-            var parcel = Group(tray, "Parcel", new Vector3(0f, 0.02f, 0.05f), 0f).gameObject;
-            Shape(parcel.transform, "Box", PrimitiveType.Cube, new Vector3(0f, 0.09f, 0f), Vector3.zero, new Vector3(0.5f, 0.18f, 0.26f), Mat("Cardboard", new Color(0.55f, 0.4f, 0.24f)));
-            Shape(parcel.transform, "Tape", PrimitiveType.Cube, new Vector3(0f, 0.181f, 0f), Vector3.zero, new Vector3(0.52f, 0.005f, 0.06f), Mat("Tape", new Color(0.75f, 0.68f, 0.5f)));
-            parcel.SetActive(false);
 
             var lamp = Shape(t, "StatusLamp", PrimitiveType.Cube, new Vector3(0.45f, 1.6f, d / 2f + 0.01f), Vector3.zero, new Vector3(0.12f, 0.06f, 0.02f), lampMat);
             Shape(t, "BeaconDome", PrimitiveType.Sphere, new Vector3(0f, h + 0.08f, 0f), Vector3.zero, new Vector3(0.22f, 0.16f, 0.22f), Mat("BeaconAmber", new Color(1f, 0.6f, 0.1f), unlit: true));
@@ -150,7 +91,6 @@ namespace CoOpHorror.Editor
             station.AdrenalineModel = battery;
             station.Lamp = lamp.GetComponent<Renderer>();
             station.Beacon = beacon;
-            station.ParcelModel = parcel;
             return station;
         }
 

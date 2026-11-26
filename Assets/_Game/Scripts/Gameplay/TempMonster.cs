@@ -306,8 +306,8 @@ namespace CoOpHorror.Gameplay
                 p.ServerApplyDamage(AttackDamage, push);
                 lungeUntil = 0f;
                 HitFxRpc(p.OwnerClientId);
-                // Whatever the victim was carrying takes the hit too.
-                if (p.TryGetComponent<PlayerInteractor>(out var victim) && victim.HeldGrabbable is Appliance carried) carried.ServerDamage(0.15f);
+                // The hit spills part of the victim's energy tank.
+                if (p.TryGetComponent<PlayerNose>(out var tank)) tank.ServerLeak(PlayerNose.LeakOnHit);
                 nextAttack = Time.time + AttackCooldown;
                 return;
             }

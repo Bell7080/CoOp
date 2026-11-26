@@ -175,7 +175,7 @@ namespace CoOpHorror.Editor
             motor.AimPivot = pivot;
             Ensure<PlayerInteractor>(root); // ElecMole: left-click interaction, telekinesis, skill checks
             Ensure<PlayerFlashlight>(root);
-            Ensure<PlayerInventory>(root);
+            Ensure<PlayerNose>(root);
             Ensure<PlayerRadio>(root);
         }
 

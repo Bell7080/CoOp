@@ -6,7 +6,7 @@ namespace CoOpHorror.Gameplay
     // impact, a blackout, then emergency power flickers the cabin back to full brightness while the grid
     // reads 0 %. The emergency cells hold the lights for EmergencyHold seconds and then fade out, after which
     // the cabin depends on the generator (ShipLighting steps). Timed from StageDirector.IntroStart
-    // (server clock) so everyone sees it together; presentation only. ShipLighting and Generator read the
+    // (server clock) so everyone sees it together; presentation only. ShipLighting reads the
     // static override values below.
     public sealed class CrashIntro : MonoBehaviour
     {

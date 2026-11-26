@@ -9,10 +9,11 @@ using UnityEngine.UI;
 namespace CoOpHorror.UI
 {
     // Local presentation of replicated values. UI, damage labels and cosmetic fragments are pooled;
-    // only Appliance on the host changes value, broken state, or socket/holder relationships.
+    // only Appliance on the host changes the power left in it.
     public sealed class ItemFeedback : MonoBehaviour
     {
         private static ItemFeedback instance;
+        public static readonly bool ShowValueLabels = false;
         private sealed class Item
         {
             public Appliance App;
@@ -100,21 +101,18 @@ namespace CoOpHorror.UI
                 var visible = new List<Renderer>();
                 foreach (var r in app.GetComponentsInChildren<Renderer>())
                     if (r.enabled && r is MeshRenderer && !r.name.StartsWith("Cell") && r.name != "Stream") visible.Add(r);
-                items.Add(new Item { App = app, Renderers = visible.ToArray(), Label = Label("ItemValue", 30, new Color(1f, 0.94f, 0.65f)), Value = app.Value.Value, Broken = app.Broken.Value });
+                items.Add(new Item { App = app, Renderers = visible.ToArray(), Label = Label("ItemValue", 30, new Color(1f, 0.94f, 0.65f)), Value = app.Remaining });
             }
             for (var n = items.Count - 1; n >= 0; n--)
             {
                 var item = items[n]; var app = item.App;
                 if (app == null) { Destroy(item.Label.gameObject); items.RemoveAt(n); continue; }
                 if (!app.IsSpawned) { item.Label.enabled = false; continue; }
-                if (!app.Broken.Value) item.Bounds = Measure(item);
-                if (app.Value.Value < item.Value)
-                    Loss(item.Bounds.center + Vector3.up * item.Bounds.extents.y, item.Value - app.Value.Value);
-                item.Value = app.Value.Value;
-                if (app.Broken.Value && !item.Broken) Break(item);
-                item.Broken = app.Broken.Value;
+                if (!app.IsGone) item.Bounds = Measure(item);
+                item.Value = app.Remaining;
                 item.Label.enabled = false;
-                if (camera == null || app.IsGone || app.BaseValue <= 0 || CctvView.Viewing) continue;
+                if (!ShowValueLabels) continue;   // the floating "worth" label is switched off (it got in the way)
+                if (camera == null || app.IsGone || app.IsEmpty || CctvView.Viewing) continue;
                 var at = item.Bounds.center + Vector3.up * (item.Bounds.extents.y + 0.15f);
                 var screen = camera.WorldToScreenPoint(at);
                 if (screen.z <= 0 || screen.z > 12f || screen.x < 0 || screen.x > Screen.width || screen.y < 0 || screen.y > Screen.height) continue;
@@ -205,7 +203,7 @@ namespace CoOpHorror.UI
         {
             var me = PlayerInteractor.Local;
             var target = me != null && !CctvView.Viewing && me.Target is IChargeGauge ? me.Target : null;
-            if (target is Appliance app && app.IsGone) target = null;
+            if (target is Appliance app && (app.IsGone || app.IsEmpty)) target = null;
             if (target != null && outline != null)
             {
                 var exists = false; foreach (var halo in halos) if (halo.Target == target) { exists = true; break; }

@@ -31,7 +31,8 @@ namespace CoOpHorror.Editor
 
         private static bool IsCorridor(RoomKind kind) => CorridorCells.Contains(kind);
 
-        // Gameplay spots placed by BuildGameplay / doors (kept in step with those calls).
+        // Gameplay spots placed by BuildGameplay / doors (kept in step with those calls). The floor ones get a
+        // stand under the appliance (OnStand), so the clutter keeps clear of them.
         private static readonly Vector3[] AppliancePositions =
         {
             new(-30f, 0f, 6f), new(14.2f, 0.95f, 9.15f), new(-22f, 0f, 25f), new(-9f, 0f, 6f),
@@ -55,11 +56,7 @@ namespace CoOpHorror.Editor
             foreach (var cam in Cameras) yield return cam.Position + Quaternion.Euler(0f, cam.Yaw, 0f) * Vector3.forward * 1.2f;
             foreach (var p in AppliancePositions) yield return p;
             foreach (var p in WardrobeFronts) yield return p;
-            yield return TransmitterPosition;
             yield return SupplyStationPosition + Quaternion.Euler(0f, SupplyStationYaw, 0f) * Vector3.forward * 1.3f;
-            for (var dx = -1; dx <= 1; dx++)
-                for (var dz = -1; dz <= 1; dz++)
-                    yield return TransmitterPosition + new Vector3(dx * (TransmitterPitHalf + 0.8f), 0f, dz * (TransmitterPitHalf + 0.8f));
             foreach (var p in CreatureStarts) yield return p;
         }
 

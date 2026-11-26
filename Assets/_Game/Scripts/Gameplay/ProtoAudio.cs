@@ -7,9 +7,10 @@ namespace CoOpHorror.Gameplay
     {
         Beep, Click, Buzz, Bang, Zap, Clunk, Pop, Alarm, Rumble, Shatter,
         MonsterNotice, MonsterLunge, MonsterHit, FootstepConcrete, FootstepMetal,
-        Jump, Land, DoorMove, FlashSwitch, PlugIn, PlugOut, PlayerHurt, PlayerDeath,
-        Revive, Radio, GeneratorCrank, Delivery, StingerMetal, StingerStatic,
-        StingerScrape, StingerBreath, AmbientBed, ShipHum, TelekinesisLoop, GeneratorLoop
+        Jump, Land, DoorMove, FlashSwitch, PlayerHurt, PlayerDeath,
+        Revive, Radio, Delivery, StingerMetal, StingerStatic,
+        StingerScrape, StingerBreath, AmbientBed, ShipHum, TelekinesisLoop, GeneratorLoop,
+        TransmitterFull
     }
 
     // All clips are original ElevenLabs generations; gameplay authority never lives in this audio facade.

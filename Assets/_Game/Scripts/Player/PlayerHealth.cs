@@ -144,6 +144,22 @@ namespace CoOpHorror.Player
             ServerRevive(transform.position, ReviveHealth, true);
         }
 
+        // Server only (dev quick restart): back at a spawn slot, alive, full health, empty tank, no body.
+        public void ServerResetForRestart(Vector3 position)
+        {
+            if (!IsServer || !IsSpawned) return;
+            StopAllCoroutines();
+            reviving = false;
+            var body = Body;
+            if (body != null && body.IsSpawned) body.NetworkObject.Despawn(true);
+            ReviveCharge.Value = 0;
+            Health.Value = MaxHealth;
+            IsDead.Value = false;
+            if (TryGetComponent<PlayerNose>(out var nose)) { nose.ServerDetach(); nose.ServerTake(nose.Energy.Value); }
+            if (TryGetComponent<PlayerFlashlight>(out var torch)) torch.On.Value = false;
+            RespawnRpc(position, transform.eulerAngles.y);
+        }
+
         // Server only. Brings the player back, at their body when it exists (atBody) or at position.
         public void ServerRevive(Vector3 position, int health, bool atBody)
         {
