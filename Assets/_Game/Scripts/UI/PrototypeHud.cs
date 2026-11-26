@@ -21,11 +21,15 @@ namespace CoOpHorror.UI
         private RectTransform healthFill, staminaFill, batteryFill;
         private Image staminaImage, batteryImage;
         private Text healthText, batteryText, flashlightText, inventoryText, radioText;
+        private Text healthNumber, batteryNumber;
         private Text objectiveText, hintText, promptText, warningText, bannerText, reviveText;
         private GameObject ring;
         private Image ringBack, zone, great, needle;
         private Text skillText;
         private RectTransform promptRect;
+        private CanvasGroup promptGroup, infoGroup;
+        private Text infoText;
+        private string shownPrompt = string.Empty, shownInfo = string.Empty;
         private Sprite ringSprite;
 
         private static readonly Vector2 Center = new(0.5f, 0.5f);
@@ -48,14 +52,18 @@ namespace CoOpHorror.UI
             scaler.matchWidthOrHeight = 0.5f;
             ringSprite = MakeRingSprite(128, 0.74f, 0.98f);
 
+            // Framed panels (CCTV-terminal look) behind the corner clusters.
+
             // Top-left: health and stamina.
-            healthText = MakeText("HealthText", 16, TextAnchor.LowerLeft, TopLeft, new Vector2(24, -20), new Vector2(300, 20), new Vector2(0, 1));
+            healthText = MakeText("HealthText", 12, TextAnchor.LowerLeft, TopLeft, new Vector2(24, -20), new Vector2(300, 20), new Vector2(0, 1));
+            healthNumber = MakeNumber("HealthNumber", 24, TopLeft, new Vector2(BarWidth + 34, -36), new Vector2(0, 1));
             healthFill = MakeBar("Health", TopLeft, new Vector2(24, -44), new Vector2(BarWidth, 14), new Color(0.95f, 0.25f, 0.22f), out _);
             staminaFill = MakeBar("Stamina", TopLeft, new Vector2(24, -64), new Vector2(BarWidth, 8), new Color(0.75f, 0.95f, 0.35f), out staminaImage);
 
             // Left: battery gauge (shared power).
             batteryFill = MakeVerticalBar("Battery", Left, new Vector2(30, 20), new Vector2(28, BatteryHeight), Electric, out batteryImage);
-            batteryText = MakeText("BatteryText", 16, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 8), new Vector2(200, 24), new Vector2(0, 1));
+            batteryText = MakeText("BatteryText", 12, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 8), new Vector2(200, 24), new Vector2(0, 1));
+            batteryNumber = MakeNumber("BatteryNumber", 24, Left, new Vector2(66, 20 + BatteryHeight / 2f - 4), new Vector2(0, 1));
             flashlightText = MakeText("FlashlightText", 14, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 30), new Vector2(240, 22), new Vector2(0, 1));
             inventoryText = MakeText("InventoryText", 15, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 56), new Vector2(320, 60), new Vector2(0, 1));
             radioText = MakeText("RadioText", 18, TextAnchor.UpperCenter, Top, new Vector2(0, -86), new Vector2(1000, 50), new Vector2(0.5f, 1));
@@ -65,11 +73,22 @@ namespace CoOpHorror.UI
             objectiveText = MakeText("Objective", 21, TextAnchor.MiddleCenter, Top, new Vector2(0, -30), new Vector2(1000, 30), new Vector2(0.5f, 1));
             hintText = MakeText("Hint", 14, TextAnchor.MiddleCenter, Top, new Vector2(0, -60), new Vector2(1000, 22), new Vector2(0.5f, 1));
             hintText.color = new Color(0.75f, 0.85f, 0.88f, 0.7f);
-            hintText.text = GameText.Get("proto.hint");
+            hintText.text = string.Empty; // no guide text
 
             // Centre.
             promptText = MakeText("Prompt", 21, TextAnchor.UpperCenter, Center, new Vector2(0, -44), new Vector2(1000, 70), Center);
             promptRect = promptText.rectTransform;
+            // Bare, chunky key prompt: [ LEFT MOUSE ] (no plate, no description). Fades in and out.
+            promptText.fontSize = 24;
+            promptText.fontStyle = FontStyle.Bold;
+            promptGroup = promptText.gameObject.AddComponent<CanvasGroup>();
+            promptGroup.alpha = 0f;
+            // What the aimed-at thing is and what it is worth, small, under the key prompt.
+            infoText = MakeText("HoverInfo", 15, TextAnchor.UpperCenter, Center, new Vector2(0, -84), new Vector2(1000, 70), Center);
+            infoText.color = new Color(0.86f, 0.97f, 0.95f, 0.85f);
+            infoText.lineSpacing = 1.1f;
+            infoGroup = infoText.gameObject.AddComponent<CanvasGroup>();
+            infoGroup.alpha = 0f;
             warningText = MakeText("MonsterWarning", 24, TextAnchor.MiddleCenter, Center, new Vector2(0, 160), new Vector2(900, 40), Center);
             warningText.color = new Color(1f, 0.3f, 0.25f);
             warningText.text = GameText.Get("proto.monsterNear");
@@ -109,7 +128,9 @@ namespace CoOpHorror.UI
             var health = PlayerHealth.Local;
             var motor = FirstPersonController.Local;
             var hp = health != null ? health.Health.Value : 0;
-            healthText.text = GameText.Format("hud.health", hp, PlayerHealth.MaxHealth);
+            healthText.text = GameText.Get("hud.healthLabel");
+            healthNumber.text = hp.ToString("000");
+            healthNumber.color = hp <= 30 ? new Color(1f, 0.35f, 0.3f) : TextColor;
             SetWidth(healthFill, BarWidth, hp / (float)PlayerHealth.MaxHealth);
             var stamina = motor != null ? motor.Stamina : 1f;
             SetWidth(staminaFill, BarWidth, stamina);
@@ -119,18 +140,31 @@ namespace CoOpHorror.UI
             var fraction = grid != null && grid.IsSpawned ? grid.Fraction : 0f;
             batteryFill.sizeDelta = new Vector2(batteryFill.sizeDelta.x, (BatteryHeight - 6) * fraction);
             batteryImage.color = fraction < PlayerFlashlight.LowPowerFraction ? new Color(1f, 0.3f, 0.2f) : Electric;
-            batteryText.text = GameText.Format("proto.power", Mathf.FloorToInt(fraction * 100f));
+            batteryText.text = GameText.Get("hud.powerLabel");
+            batteryNumber.text = Mathf.FloorToInt(fraction * 100f).ToString("000");
+            batteryNumber.color = batteryImage.color;
             var flashlight = me.GetComponent<PlayerFlashlight>();
-            flashlightText.text = GameText.Get(flashlight != null && flashlight.On.Value ? "proto.flashlightOn" : "proto.flashlightOff");
+            flashlightText.text = string.Empty; // no guide text
 
             UpdateObjective(health);
             UpdateSkillCheck(me.Check);
             UpdateInventory(me);
             UpdateRadio(me);
 
-            promptText.text = FirstPersonController.CursorCaptured && !FirstPersonController.ViewLocked ? me.Prompt : string.Empty;
+            var wanted = FirstPersonController.CursorCaptured && !FirstPersonController.ViewLocked ? KeyPrompt(me) : string.Empty;
+            if (!string.IsNullOrEmpty(wanted)) shownPrompt = wanted;    // keep the last text while fading out
+            promptGroup.alpha = Mathf.MoveTowards(promptGroup.alpha, string.IsNullOrEmpty(wanted) ? 0f : 1f, Time.deltaTime * (string.IsNullOrEmpty(wanted) ? 6f : 10f));
+            promptText.text = promptGroup.alpha > 0f ? shownPrompt : string.Empty;
             promptText.color = me.HoldingUse ? new Color(1f, 0.85f, 0.35f) : TextColor;
             promptRect.anchoredPosition = new Vector2(0, ring.activeSelf ? -RingSize / 2f - 30f : -44f);
+
+            var info = FirstPersonController.CursorCaptured && !FirstPersonController.ViewLocked && me.Target != null && !ring.activeSelf
+                ? me.Target.HoverInfo(me) : string.Empty;
+            if (!string.IsNullOrEmpty(info)) shownInfo = info;
+            infoGroup.alpha = Mathf.MoveTowards(infoGroup.alpha, string.IsNullOrEmpty(info) ? 0f : 1f, Time.deltaTime * (string.IsNullOrEmpty(info) ? 6f : 10f));
+            infoText.text = infoGroup.alpha > 0f ? shownInfo : string.Empty;
+            infoText.rectTransform.anchoredPosition = new Vector2(0, string.IsNullOrEmpty(wanted) ? -44f : -84f);
+
 
             var dead = health != null && health.IsDead.Value;
             reviveText.enabled = dead;
@@ -145,7 +179,7 @@ namespace CoOpHorror.UI
             foreach (var monster in TempMonster.All)
                 if (monster != null && monster.IsSpawned && monster.Chasing.Value
                     && (monster.transform.position - me.transform.position).sqrMagnitude < 16f * 16f) near = true;
-            warningText.enabled = near && Mathf.PingPong(Time.unscaledTime * 2f, 1f) > 0.25f;
+            warningText.enabled = false; // no "monster near" text: you hear it
         }
 
         private void UpdateObjective(PlayerHealth health)
@@ -191,7 +225,7 @@ namespace CoOpHorror.UI
                     bannerColor = new Color(1f, 0.3f, 0.25f);
                     break;
             }
-            objectiveText.text = objective;
+            objectiveText.text = string.Empty; // objectives are learned by playing, not read
             bannerText.text = banner;
             bannerText.color = bannerColor;
         }
@@ -312,7 +346,7 @@ namespace CoOpHorror.UI
             rect.pivot = pivot;
             var text = go.GetComponent<Text>();
             text.font = GameText.UiFont;
-            text.fontSize = size;
+            text.fontSize = GameText.PixelSize(size);
             text.alignment = alignment;
             text.color = TextColor;
             text.raycastTarget = false;
@@ -320,6 +354,52 @@ namespace CoOpHorror.UI
             text.verticalOverflow = VerticalWrapMode.Overflow;
             go.GetComponent<Outline>().effectColor = new Color(0, 0, 0, 0.75f);
             return text;
+        }
+
+        // Only the key, no explanation: [ LEFT MOUSE ], [ HOLD LEFT MOUSE ], [ HOLD E ].
+        private static string KeyPrompt(PlayerInteractor me)
+        {
+            var keys = new System.Collections.Generic.List<string>();
+            if (PlayerReviver.LocalLookingAtBody) keys.Add("[ HOLD E ]");
+            if (me.Target is ShipMic) keys.Add("[ HOLD V ]");
+            switch (me.TargetKind)
+            {
+                case InteractKind.Press:
+                case InteractKind.PressOrHold: keys.Add("[ LEFT MOUSE ]"); break;
+                case InteractKind.Hold: keys.Add("[ HOLD LEFT MOUSE ]"); break;
+            }
+            if (keys.Count == 0 && me.HoldingUse) keys.Add("[ HOLD LEFT MOUSE ]");
+            switch (me.PlugKeyAction)
+            {
+                case PlayerInteractor.PlugAction.Take: keys.Add("[ E ] " + GameText.Get("hud.plugTake")); break;
+                case PlayerInteractor.PlugAction.Socket:
+                case PlayerInteractor.PlugAction.SocketTap: keys.Add("[ E ] " + GameText.Get("hud.plugSocket")); break;
+                case PlayerInteractor.PlugAction.Return: keys.Add("[ E ] " + GameText.Get("hud.plugReturn")); break;
+            }
+            return string.Join("   ", keys);
+        }
+
+        // Seven-segment digits (DSEG7) for plain numbers.
+        private Text MakeNumber(string name, int size, Vector2 anchor, Vector2 position, Vector2 pivot)
+        {
+            var text = MakeText(name, size, TextAnchor.UpperLeft, anchor, position, new Vector2(160, size + 8), pivot);
+            if (GameText.NumberFont != null) text.font = GameText.NumberFont;
+            text.fontSize = size;
+            return text;
+        }
+
+        private void MakePanel(string name, Vector2 anchor, Vector2 position, Vector2 size, Vector2 pivot)
+        {
+            var go = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Outline));
+            var rect = Place(go, canvas.transform, anchor, position, size);
+            rect.pivot = pivot;
+            go.transform.SetAsFirstSibling();
+            var image = go.GetComponent<Image>();
+            image.color = new Color(0.02f, 0.05f, 0.05f, 0.55f);
+            image.raycastTarget = false;
+            var outline = go.GetComponent<Outline>();
+            outline.effectColor = new Color(0.35f, 0.95f, 1f, 0.35f);
+            outline.effectDistance = new Vector2(2f, -2f);
         }
 
         private static RectTransform Place(GameObject go, Transform parent, Vector2 anchor, Vector2 position, Vector2 size)

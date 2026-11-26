@@ -62,6 +62,16 @@ namespace CoOpHorror.UI
         private int monitorIndex = -1;
         private float monitorNext;
         private float staticUntil;
+        // Minimap page (arrow button): rooms with a powered camera, green dots for players, red for monsters.
+        private bool minimapPage;
+        private RectTransform minimapRoot, minimapContent;
+        private Text pageButtonText;
+        private int miniMask = -1;
+        private float miniScale = 1f;
+        private Vector3 miniMid;
+        private readonly List<(Vector3 min, Vector3 max)> miniRooms = new();
+        private readonly List<Image> miniDots = new();
+        private const float MiniWidth = 900f, MiniHeight = 600f;
 
         private static readonly int MainTexId = Shader.PropertyToID("_MainTex");
         private static readonly int ZoomId = Shader.PropertyToID("_Zoom");
@@ -179,6 +189,7 @@ namespace CoOpHorror.UI
             if (index >= 0 && index < CctvCamera.All.Count) CctvCamera.All[index].ReleaseLocalAim();
             viewing = false;
             dragging = false;
+            if (minimapPage) ToggleMinimap();
             canvas.enabled = false;
             FirstPersonController.ViewLocked = false;
             if (PlayerInteractor.Local != null) FirstPersonController.SetCursorCaptured(true);
@@ -237,7 +248,7 @@ namespace CoOpHorror.UI
             }
 
             var cam = cams[index];
-            if (m == null) return;
+            if (m == null || minimapPage) return;
             // Drag on the picture (not on the map) to turn the camera head.
             if (m.leftButton.wasPressedThisFrame) dragging = EventSystem.current == null || !EventSystem.current.IsPointerOverGameObject();
             if (!m.leftButton.isPressed) dragging = false;
@@ -298,6 +309,126 @@ namespace CoOpHorror.UI
             feedRect.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, lean);
             UpdateOverlay(cam, live);
             UpdateMap();
+            UpdateMinimap();
+        }
+
+        // ---------- minimap page ----------
+
+        public void ToggleMinimap()
+        {
+            minimapPage = !minimapPage;
+            dragging = false;
+            pageButtonText.text = GameText.Get(minimapPage ? "cctv.pageFeed" : "cctv.pageMinimap");
+            var me = PlayerHealth.Local;
+            if (me != null) ProtoAudio.Play(ProtoSound.Click, me.transform.position, 0.4f);
+        }
+
+        private void UpdateMinimap()
+        {
+            minimapRoot.gameObject.SetActive(minimapPage);
+            if (!minimapPage) return;
+            var cams = CctvCamera.All;
+            var mask = 0;
+            for (var i = 0; i < cams.Count && i < 30; i++) if (cams[i].Online) mask |= 1 << i;
+            if (mask != miniMask) { miniMask = mask; RebuildMinimap(); }
+
+            var used = 0;
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned && !p.IsDead.Value) Dot(ref used, p.transform.position, new Color(0.3f, 1f, 0.4f));
+            foreach (var monster in TempMonster.All)
+                if (monster != null && monster.IsSpawned) Dot(ref used, monster.transform.position, new Color(1f, 0.2f, 0.15f));
+            for (var i = used; i < miniDots.Count; i++) miniDots[i].enabled = false;
+        }
+
+        // Only things inside a room watched by a powered camera show up.
+        private void Dot(ref int used, Vector3 position, Color color)
+        {
+            var inside = false;
+            foreach (var (min, max) in miniRooms)
+                if (position.x >= min.x && position.x <= max.x && position.z >= min.z && position.z <= max.z) { inside = true; break; }
+            if (!inside) return;
+            if (used >= miniDots.Count)
+            {
+                var go = new GameObject("Dot", typeof(RectTransform), typeof(Image));
+                var rect = go.GetComponent<RectTransform>();
+                rect.SetParent(minimapContent, false);
+                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.sizeDelta = new Vector2(14f, 14f);
+                var image = go.GetComponent<Image>();
+                image.raycastTarget = false;
+                miniDots.Add(image);
+            }
+            var dot = miniDots[used++];
+            dot.enabled = true;
+            dot.color = color;
+            dot.rectTransform.SetAsLastSibling();
+            dot.rectTransform.anchoredPosition = new Vector2((position.x - miniMid.x) * miniScale, (position.z - miniMid.z) * miniScale);
+        }
+
+        private void RebuildMinimap()
+        {
+            foreach (var dot in miniDots) if (dot != null) Destroy(dot.gameObject);
+            miniDots.Clear();
+            foreach (Transform child in minimapContent) Destroy(child.gameObject);
+            miniRooms.Clear();
+            var cams = CctvCamera.All;
+            var stage = StageDirector.Instance;
+            // Fit every watched room plus the ship so the layout does not jump as cameras come on.
+            var min = stage != null ? stage.ShipMin : Vector3.zero;
+            var max = stage != null ? stage.ShipMax : Vector3.zero;
+            foreach (var c in cams) { min = Vector3.Min(min, c.RoomMin); max = Vector3.Max(max, c.RoomMax); }
+            miniScale = Mathf.Min((MiniWidth - 60f) / Mathf.Max(8f, max.x - min.x), (MiniHeight - 90f) / Mathf.Max(8f, max.z - min.z));
+            miniMid = (min + max) * 0.5f;
+            Vector2 ToMini(Vector3 w) => new((w.x - miniMid.x) * miniScale, (w.z - miniMid.z) * miniScale);
+            RectTransform Box(string name, Vector3 a, Vector3 b, Color color)
+            {
+                var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+                var rect = go.GetComponent<RectTransform>();
+                rect.SetParent(minimapContent, false);
+                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
+                rect.anchoredPosition = (ToMini(a) + ToMini(b)) * 0.5f;
+                rect.sizeDelta = new Vector2(Mathf.Abs(b.x - a.x), Mathf.Abs(b.z - a.z)) * miniScale - new Vector2(4f, 4f);
+                var image = go.GetComponent<Image>();
+                image.color = color;
+                image.raycastTarget = false;
+                var outline = go.AddComponent<Outline>();
+                outline.effectColor = new Color(0.8f, 0.9f, 0.85f, 0.9f);
+                outline.effectDistance = new Vector2(1.5f, -1.5f);
+                return rect;
+            }
+            if (stage != null)
+            {
+                var ship = Box("Ship", stage.ShipMin, stage.ShipMax, new Color(0.25f, 0.45f, 0.2f, 0.6f));
+                MapLabelOn(ship, GameText.Get("cctv.mapShip"), 16);
+            }
+            for (var i = 0; i < cams.Count; i++)
+            {
+                if (!cams[i].Online || cams[i].RoomMax == cams[i].RoomMin) continue;
+                var range = (cams[i].RoomMin, cams[i].RoomMax);
+                if (miniRooms.Contains(range)) continue;
+                miniRooms.Add(range);
+                var room = Box("Room_" + (i + 1), range.Item1, range.Item2, new Color(0.16f, 0.18f, 0.18f, 0.95f));
+                MapLabelOn(room, $"CAM {i + 1:00}", 15);
+            }
+        }
+
+        private static void MapLabelOn(RectTransform parent, string value, int size)
+        {
+            var go = new GameObject("Label", typeof(RectTransform), typeof(Text));
+            var rect = go.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, -4f);
+            rect.sizeDelta = new Vector2(0f, 22f);
+            var text = go.GetComponent<Text>();
+            text.font = GameText.UiFont;
+            text.fontSize = size;
+            text.alignment = TextAnchor.UpperCenter;
+            text.color = new Color(0.85f, 0.92f, 0.88f);
+            text.raycastTarget = false;
+            text.text = value;
         }
 
         private static bool LocalAliveInShip()
@@ -503,9 +634,10 @@ namespace CoOpHorror.UI
             nameText = MakeText("Name", 24, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(330, -96), feedColor);
             zoomText = MakeText("Zoom", 16, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(330, -128), feedColor);
             timeText = MakeText("Time", 22, TextAnchor.UpperRight, new Vector2(1, 1), new Vector2(-120, -96), feedColor);
+            if (GameText.NumberFont != null) { timeText.font = GameText.NumberFont; timeText.fontSize = 22; }
             centerText = MakeText("NoSignal", 30, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), Vector2.zero, new Color(1f, 0.45f, 0.35f));
             controlsText = MakeText("Controls", 16, TextAnchor.LowerLeft, new Vector2(0, 0), new Vector2(120, 70), new Color(0.85f, 0.92f, 0.88f, 0.85f));
-            controlsText.text = GameText.Get("cctv.controls");
+            controlsText.text = string.Empty; // no guide text
 
             // Map panel in the bottom-right corner.
             var map = new GameObject("Map", typeof(RectTransform), typeof(Image));
@@ -525,6 +657,44 @@ namespace CoOpHorror.UI
             var title = MakeText("MapTitle", 14, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(10, -8), feedColor);
             title.rectTransform.SetParent(mapRect, false);
             title.text = GameText.Get("cctv.mapTitle");
+
+            // Minimap page, covering the feed while open.
+            var mini = new GameObject("Minimap", typeof(RectTransform), typeof(Image));
+            minimapRoot = mini.GetComponent<RectTransform>();
+            minimapRoot.SetParent(canvas.transform, false);
+            minimapRoot.anchorMin = minimapRoot.anchorMax = minimapRoot.pivot = new Vector2(0.5f, 0.5f);
+            minimapRoot.sizeDelta = new Vector2(MiniWidth, MiniHeight);
+            var miniImage = mini.GetComponent<Image>();
+            miniImage.color = new Color(0.02f, 0.04f, 0.03f, 0.97f);
+            miniImage.raycastTarget = true;
+            mini.AddComponent<Outline>().effectColor = new Color(0.5f, 0.75f, 0.55f, 0.8f);
+            var miniContent = new GameObject("Content", typeof(RectTransform));
+            minimapContent = miniContent.GetComponent<RectTransform>();
+            minimapContent.SetParent(minimapRoot, false);
+            minimapContent.anchorMin = minimapContent.anchorMax = minimapContent.pivot = new Vector2(0.5f, 0.5f);
+            minimapContent.anchoredPosition = new Vector2(0f, -20f);
+            var miniTitle = MakeText("MinimapTitle", 18, TextAnchor.UpperLeft, new Vector2(0, 1), new Vector2(16, -12), feedColor);
+            miniTitle.rectTransform.SetParent(minimapRoot, false);
+            miniTitle.text = string.Empty;
+            mini.SetActive(false);
+
+            // Page arrow on the right edge.
+            var page = new GameObject("PageButton", typeof(RectTransform), typeof(Image), typeof(Button));
+            var pageRect = page.GetComponent<RectTransform>();
+            pageRect.SetParent(canvas.transform, false);
+            pageRect.anchorMin = pageRect.anchorMax = pageRect.pivot = new Vector2(1f, 0.5f);
+            pageRect.anchoredPosition = new Vector2(-24f, 0f);
+            pageRect.sizeDelta = new Vector2(150f, 56f);
+            var pageImage = page.GetComponent<Image>();
+            pageImage.color = new Color(0.1f, 0.16f, 0.12f, 0.85f);
+            page.GetComponent<Button>().targetGraphic = pageImage;
+            page.GetComponent<Button>().onClick.AddListener(ToggleMinimap);
+            page.AddComponent<Outline>().effectColor = new Color(0.6f, 0.9f, 0.65f, 0.9f);
+            pageButtonText = MakeText("PageLabel", 20, TextAnchor.MiddleCenter, new Vector2(0.5f, 0.5f), Vector2.zero, feedColor);
+            pageButtonText.rectTransform.SetParent(pageRect, false);
+            pageButtonText.rectTransform.anchoredPosition = Vector2.zero;
+            pageButtonText.rectTransform.sizeDelta = pageRect.sizeDelta;
+            pageButtonText.text = GameText.Get("cctv.pageMinimap");
             canvas.enabled = false;
         }
 
@@ -547,7 +717,7 @@ namespace CoOpHorror.UI
             rect.sizeDelta = new Vector2(900, 40);
             var text = go.GetComponent<Text>();
             text.font = GameText.UiFont;
-            text.fontSize = size;
+            text.fontSize = GameText.PixelSize(size);
             text.alignment = alignment;
             text.color = color;
             text.raycastTarget = false;

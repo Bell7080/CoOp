@@ -19,13 +19,19 @@ namespace CoOpHorror.Gameplay
         public const float FailNoiseRadius = 12f;
         public const float PullDuration = 2.6f;
         public const float SinkDuration = 3.5f;
-        public const float SinkDepth = 5.5f;
+        public const float SinkDepth = 14f;      // the lift drops into the shaft and out of sight
+        public const float LidOpenAngle = 112f;
+        public const float RiseDepth = 3.2f;     // dormant: the lift waits this far down under the closed lids
+        public const float RiseDelay = 1.1f;     // powered: the lids swing open first...
+        public const float RiseSeconds = 3f;     // ...then the lift climbs up to the floor
+        public const float CollapseSeconds = 2.5f;
         public const float FlyingHitRadius = 0.9f;
         public const int FlyingHitDamage = 15;
 
         public static Transmitter Instance { get; private set; }
 
         public float Capacity = 30f;
+        public int TargetValue = 600;          // settlement goal shown on the lift's monitor
         public Transform Body;
         public Transform Mouth;
         public GameObject Hole;
@@ -33,6 +39,11 @@ namespace CoOpHorror.Gameplay
         public Renderer[] SocketLamps;
         public Renderer PowerLamp;
         public Light Beacon;
+        // The settlement point is a lift sunk in the ground: two hatch lids open once it is powered; when the
+        // cords are pulled in, cracks spread and the ground around the hatch breaks into the shaft below.
+        public Transform LidA, LidB;          // hinge pivots; open about local Z
+        public Transform[] Chunks;            // pieces of floor around the hatch that collapse
+        public Transform[] Cracks;            // crack lines that grow while the cords are being pulled
 
         public readonly NetworkVariable<float> Charge = new(0f);
         public readonly NetworkVariable<TransmitterPhase> Phase = new(TransmitterPhase.Dormant);
@@ -43,11 +54,21 @@ namespace CoOpHorror.Gameplay
         private Collider[] bodyColliders;
         private readonly HashSet<(ulong, ulong)> flyingHits = new();
         private int settledValue;
+        private float lid;
+        private Vector3[] chunkHome;
+        private Quaternion[] chunkRot;
+        private Vector3[] chunkSpin;
+        private bool collapsedFx, riseFx;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         public int Required => Sockets != null ? Sockets.Length : 0;
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
         public bool IsActive => Phase.Value == TransmitterPhase.Active;
+        // 0 = down in the shaft (dormant), 1 = up at floor level, ready for cords.
+        public float RiseProgress => !IsSpawned ? 0f
+            : Phase.Value == TransmitterPhase.Dormant ? 0f
+            : Phase.Value == TransmitterPhase.Active ? Mathf.Clamp01((PhaseElapsed - RiseDelay) / RiseSeconds) : 1f;
+        public bool IsRaised => IsActive && RiseProgress >= 1f;
         public float PhaseElapsed => IsSpawned ? (float)(NetTime - PhaseStart.Value) : 0f;
         public Vector3 MouthPosition => Mouth != null ? Mouth.position : transform.position + Vector3.up * 1.5f;
         public override bool UsesSkillChecks => Phase.Value == TransmitterPhase.Dormant;
@@ -62,7 +83,7 @@ namespace CoOpHorror.Gameplay
             get
             {
                 var count = 0;
-                foreach (var p in CordPlug.All) if (p.IsSocketed) count++;
+                foreach (var p in CordPlug.All) if (p.InTransmitter) count++;
                 return count;
             }
         }
@@ -73,7 +94,7 @@ namespace CoOpHorror.Gameplay
             get
             {
                 var sum = 0;
-                foreach (var p in CordPlug.All) if (p.IsSocketed && p.Appliance != null) sum += p.Appliance.Value.Value;
+                foreach (var p in CordPlug.All) if (p.InTransmitter && p.Appliance != null) sum += p.Appliance.SettleValue;
                 return sum;
             }
         }
@@ -89,6 +110,20 @@ namespace CoOpHorror.Gameplay
             {
                 bodyHome = Body.localPosition;
                 bodyColliders = Body.GetComponentsInChildren<Collider>(true);
+            }
+            if (Chunks != null)
+            {
+                chunkHome = new Vector3[Chunks.Length];
+                chunkRot = new Quaternion[Chunks.Length];
+                chunkSpin = new Vector3[Chunks.Length];
+                var rng = new System.Random(17);
+                for (var i = 0; i < Chunks.Length; i++)
+                {
+                    if (Chunks[i] == null) continue;
+                    chunkHome[i] = Chunks[i].localPosition;
+                    chunkRot[i] = Chunks[i].localRotation;
+                    chunkSpin[i] = new Vector3((float)rng.NextDouble() - 0.5f, (float)rng.NextDouble() - 0.5f, (float)rng.NextDouble() - 0.5f) * 260f;
+                }
             }
         }
 
@@ -116,7 +151,7 @@ namespace CoOpHorror.Gameplay
 
         private bool SocketUsed(int index)
         {
-            foreach (var p in CordPlug.All) if (p.IsSocketed && p.Socket.Value == index) return true;
+            foreach (var p in CordPlug.All) if (p.InTransmitter && p.Socket.Value == index) return true;
             return false;
         }
 
@@ -137,6 +172,7 @@ namespace CoOpHorror.Gameplay
                     prompt = GameText.Format("interact.transmitterCharge", ChargePercent);
                     return InteractKind.Hold;
                 case TransmitterPhase.Active:
+                    if (!IsRaised) { prompt = string.Empty; return InteractKind.None; }
                     var plug = who.HeldPlug;
                     if (plug != null && plug.Appliance != null)
                     {
@@ -180,15 +216,24 @@ namespace CoOpHorror.Gameplay
         // Plug in the carried cord.
         public override void ServerUse(PlayerInteractor who)
         {
-            if (Phase.Value != TransmitterPhase.Active) return;
+            if (!IsRaised) return;
             var plug = who.HeldPlug;
             if (plug == null || plug.Appliance == null || !plug.Appliance.IsCharged) return;
             var socket = FreeSocket();
             if (socket < 0) return;
             plug.ServerSocket(socket);
             ProtoAudio.Play(ProtoSound.Clunk, transform.position, 1f);
-            if (!IsComplete) return;
-            Debug.Log("[ElecMole] Transmitter complete; settling");
+            ServerTrySettle();
+        }
+
+        // Settlement only runs once what is plugged in (directly or through power strips) reaches the target.
+        // Short of it, nothing happens: pull a cord back out and bring something worth more.
+        public bool MeetsTarget => PluggedValue >= TargetValue;
+
+        private void ServerTrySettle()
+        {
+            if (!IsRaised || !MeetsTarget) return;
+            Debug.Log("[ElecMole] Transmitter target reached; settling");
             settledValue = PluggedValue;
             flyingHits.Clear();
             ServerSetPhase(TransmitterPhase.Settling);
@@ -204,6 +249,9 @@ namespace CoOpHorror.Gameplay
         {
             switch (Phase.Value)
             {
+                case TransmitterPhase.Active:
+                    ServerTrySettle(); // a power strip already in a socket can fill up later
+                    break;
                 case TransmitterPhase.Settling:
                     ServerFlyingHits();
                     if (PhaseElapsed >= PullDuration) ServerSetPhase(TransmitterPhase.Sinking);
@@ -223,7 +271,7 @@ namespace CoOpHorror.Gameplay
         {
             foreach (var appliance in Appliance.All)
             {
-                if (!appliance.IsSpawned || !appliance.IsPlugged || appliance.Swallowed.Value) continue;
+                if (!appliance.IsSpawned || !appliance.InSettlement || appliance.Swallowed.Value) continue;
                 var pose = new Pose(appliance.transform.position, appliance.transform.rotation);
                 foreach (var player in PlayerHealth.All)
                 {
@@ -251,11 +299,70 @@ namespace CoOpHorror.Gameplay
                 var sink = phase == TransmitterPhase.Sinking ? Mathf.Clamp01(elapsed / SinkDuration) : phase == TransmitterPhase.Gone ? 1f : 0f;
                 var shaking = phase == TransmitterPhase.Settling || phase == TransmitterPhase.Sinking;
                 var shake = shaking ? new Vector3(Random.Range(-1f, 1f), 0f, Random.Range(-1f, 1f)) * 0.04f : Vector3.zero;
-                Body.localPosition = bodyHome + Vector3.down * (SinkDepth * sink * sink) + shake;
+                // waits below the lids until powered, then climbs up (eased, with a judder on the way)
+                var rise = RiseProgress;
+                var climbing = rise > 0f && rise < 1f;
+                if (climbing) shake = new Vector3(Random.Range(-1f, 1f), 0f, Random.Range(-1f, 1f)) * 0.015f;
+                var below = RiseDepth * (1f - Mathf.SmoothStep(0f, 1f, rise));
+                Body.localPosition = bodyHome + Vector3.down * (below + SinkDepth * sink * sink) + shake;
                 Body.gameObject.SetActive(phase != TransmitterPhase.Gone);
                 if (bodyColliders != null) foreach (var c in bodyColliders) if (c != null) c.enabled = phase < TransmitterPhase.Sinking;
             }
             if (Hole != null) Hole.SetActive(phase >= TransmitterPhase.Sinking);
+
+            // hatch lids swing open once powered
+            lid = Mathf.MoveTowards(lid, phase >= TransmitterPhase.Active ? 1f : 0f, Time.deltaTime * 0.9f);
+            var open = Mathf.SmoothStep(0f, 1f, lid) * LidOpenAngle;
+            if (LidA != null) LidA.localRotation = Quaternion.Euler(0f, 0f, -open);
+            if (LidB != null) LidB.localRotation = Quaternion.Euler(0f, 0f, open);
+
+            // cracks run out across the floor while the cords are reeled in
+            var crack = phase == TransmitterPhase.Settling ? Mathf.Clamp01(elapsed / PullDuration) : phase > TransmitterPhase.Settling ? 1f : 0f;
+            if (Cracks != null)
+                foreach (var c in Cracks)
+                {
+                    if (c == null) continue;
+                    c.gameObject.SetActive(crack > 0f);
+                    c.localScale = new Vector3(c.localScale.x, c.localScale.y, Mathf.Max(0.001f, crack));
+                    var inner = c.Find("Inner");
+                    if (inner != null) inner.gameObject.SetActive(phase < TransmitterPhase.Sinking);
+                }
+
+            // then the ground breaks: the pieces around the hatch drop into the shaft, tumbling
+            if (Chunks != null && chunkHome != null)
+            {
+                var fall = phase == TransmitterPhase.Sinking ? elapsed : phase == TransmitterPhase.Gone ? CollapseSeconds : -1f;
+                for (var i = 0; i < Chunks.Length; i++)
+                {
+                    var chunk = Chunks[i];
+                    if (chunk == null) continue;
+                    var t = fall - i * 0.06f; // they give way one after another
+                    if (t <= 0f) { chunk.localPosition = chunkHome[i]; chunk.localRotation = chunkRot[i]; chunk.gameObject.SetActive(true); }
+                    else
+                    {
+                        chunk.localPosition = chunkHome[i] + Vector3.down * (4.9f * t * t);
+                        chunk.localRotation = chunkRot[i] * Quaternion.Euler(chunkSpin[i] * t);
+                        chunk.gameObject.SetActive(t < CollapseSeconds);
+                    }
+                    var col = chunk.GetComponent<Collider>();
+                    if (col != null) col.enabled = t <= 0f;
+                }
+            }
+            if (phase == TransmitterPhase.Sinking && !collapsedFx)
+            {
+                collapsedFx = true;
+                ProtoAudio.Play(ProtoSound.Bang, transform.position, 1f);
+                ProtoAudio.Play(ProtoSound.Rumble, transform.position, 1f);
+                var cam = Camera.main;
+                if (cam != null && (cam.transform.position - transform.position).sqrMagnitude < 14f * 14f) CrashIntro.Scare(0.18f, 1.2f);
+            }
+            if (phase < TransmitterPhase.Sinking) collapsedFx = false;
+            if (phase == TransmitterPhase.Active && elapsed >= RiseDelay && elapsed < RiseDelay + RiseSeconds && !riseFx)
+            {
+                riseFx = true;
+                ProtoAudio.Play(ProtoSound.Rumble, transform.position, 0.8f);
+            }
+            if (phase == TransmitterPhase.Dormant) riseFx = false;
 
             if (SocketLamps != null)
                 for (var i = 0; i < SocketLamps.Length; i++)
@@ -267,6 +374,7 @@ namespace CoOpHorror.Gameplay
                 }
             if (PowerLamp != null)
             {
+                PowerLamp.gameObject.SetActive(phase < TransmitterPhase.Sinking);
                 var t = IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
                 Tint(PowerLamp, IsStalled && Random.value < 0.4f ? new Color(1f, 0.3f, 0.1f) : Color.Lerp(new Color(0.15f, 0.04f, 0.03f), new Color(0.3f, 0.6f, 1f), t));
             }

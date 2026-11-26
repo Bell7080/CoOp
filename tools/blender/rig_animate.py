@@ -41,6 +41,7 @@ def tf(p):
     return Vector((y * S, -x * S, (z + 0.5) * S))
 
 me = mesh.data
+orig = [(v.co.x, v.co.y, v.co.z) for v in me.vertices]  # Tripo unit-box coordinates, for HARD weights
 for v in me.vertices:
     v.co = tf((v.co.x, v.co.y, v.co.z))
 me.update()
@@ -85,6 +86,14 @@ for v in me.vertices:
     for w, n in ws:
         if w / tot > 0.02:
             mesh.vertex_groups[n].add([v.index], w / tot, "REPLACE")
+
+# Hard weights: rigid parts (a TV cabinet) or small regions (a jaw) that must follow one bone only.
+for bone, test in cfg.get("HARD", []):
+    for v in me.vertices:
+        if not test(*orig[v.index]): continue
+        for g in list(v.groups):
+            mesh.vertex_groups[g.group].remove([v.index])
+        mesh.vertex_groups[bone].add([v.index], 1.0, "REPLACE")
 
 mesh.parent = arm
 mod = mesh.modifiers.new("Armature", "ARMATURE")

@@ -57,7 +57,9 @@ namespace CoOpHorror.Localization
 
             // HUD
             ["hud.health"] = "체력 {0} / {1}",
-            ["hud.controls"] = "WASD 이동 · Shift 달리기 · Ctrl 웅크리기(숨기) · Space 점프(스킬체크) · 좌클릭 상호작용(꾹: 염력) · 우클릭 꾹: 돌리기 · Q 놓기 · 1 인벤토리 · E 무전 · F 손전등 · F1 개발 도구",
+            ["hud.healthLabel"] = "HP",
+            ["hud.powerLabel"] = "PW",
+            ["hud.controls"] = "WASD 이동 · Shift 달리기 · Ctrl 웅크리기(숨기) · Space 점프(스킬체크) · 좌클릭 상호작용(꾹: 염력) · 우클릭 꾹: 돌리기 · Q 놓기 · 1 인벤토리 · E 코드 뽑기/넣기 · V 무전 · F 손전등 · F1 개발 도구",
             ["hud.discharged"] = "방전되었습니다 — 유령이 되어 동료를 관전합니다",
             ["hud.cursorFree"] = "커서 해제됨 — 게임 화면을 클릭하면 조작으로 돌아갑니다",
             ["hud.scoreLine"] = "플레이어 {0}{1}   체력 {2}",
@@ -123,15 +125,71 @@ namespace CoOpHorror.Localization
             ["interact.doorCharge"] = "[좌클릭 길게] 문에 전력 넣기 ({0}%)",
             ["interact.doorNoPower"] = "닫힌 문 ({0}%) — 공용 전기가 없습니다. 발전기를 돌리세요",
             ["interact.doorOpen"] = "[좌클릭] 문 열기",
+            ["interact.doorSwingOpen"] = "[좌클릭] 문 열기 (밀고 지나가도 열립니다)",
+            ["interact.doorSwingClose"] = "[좌클릭] 문 닫기",
+            ["cctv.pageMinimap"] = "미니맵 >",
+            ["cctv.pageFeed"] = "< 카메라",
+            ["cctv.minimapTitle"] = "미니맵 — 켜진 카메라가 있는 방만 보입니다 (초록: 아군, 빨강: 괴물)",
             ["interact.doorClose"] = "[좌클릭] 문 닫기",
             ["interact.doorBlocked"] = "문 사이에 누가 있어 닫을 수 없습니다",
             ["interact.doorDead"] = "전기가 없어 문이 움직이지 않습니다 — 발전기를 돌리세요",
             ["interact.launch"] = "[좌클릭] 출발 버튼 누르기",
             ["interact.launching"] = "출발까지 {0}초",
             ["interact.launchLocked"] = "출발 버튼 — 송신을 먼저 끝내야 합니다",
+            ["supply.title"] = "지원 물품 주문",
+            ["supply.medkit"] = "구급키트",
+            ["supply.adrenaline"] = "아드레날린",
+            ["supply.sending"] = "지원스테이션으로 전송 중",
+            ["supply.waiting"] = "스테이션 도착 · 수령 대기",
+            ["hover.supplyIdle"] = "지원스테이션 — 우주선 단말기에서 주문한 물품이 여기 도착",
+            ["hover.medkitEffect"] = "체력 +40 회복",
+            ["hover.adrenalineEffect"] = "20초 동안 달려도 지치지 않음",
+            ["hover.appliance"] = "{0} · 가치 {1}",
+            ["hover.applianceDamaged"] = "{0} · 가치 {1} (원래 {2})",
+            ["hover.charged"] = "충전됨",
+            ["hover.needsCharge"] = "충전 필요",
+            ["hover.heavy"] = "{0}명이 들어야 함",
+            ["hover.tiny"] = "가방에 넣을 수 있음",
+            ["shop.title"] = "지원 물품 상점",
+            ["shop.credits"] = "보유 ${0}",
+            ["shop.confirm"] = "구매하시겠습니까?",
+            ["shop.ok"] = "확인",
+            ["shop.cancel"] = "취소",
+            ["shop.ordering"] = "주문 중...",
+            ["shop.bought"] = "{0} 구매 완료\n지원스테이션으로 전송 중",
+            ["shop.noMoney"] = "잔액이 부족합니다",
+            ["shop.busy"] = "배송 중인 물품이 있습니다\n스테이션에서 먼저 받아 가세요",
+            ["shop.tooFar"] = "단말기에서 너무 멉니다",
+            ["shop.hint"] = "항목을 눌러 구매 · 휠로 목록 이동",
+            ["settle.target"] = "정산 목표  ${0}",
+            ["settle.plugged"] = "연결됨  ${0}",
+            ["settle.sockets"] = "콘센트 {0} / {1}",
+            ["settle.needPower"] = "전력 공급 필요  {0}%",
+            ["settle.rising"] = "리프트 상승 중...",
+            ["settle.ready"] = "가전 코드를 연결하세요",
+            ["settle.settling"] = "정산 중...",
+            ["settle.done"] = "정산 완료",
+            ["appliance.multitap2"] = "2구 멀티탭",
+            ["appliance.multitap3"] = "3구 멀티탭",
+            ["appliance.multitap5"] = "5구 멀티탭",
+            ["appliance.multitap8"] = "8구 멀티탭",
+            ["hover.multitap"] = "{0} · 꽂힘 {1}/{2} · 합계 ${3}",
+            ["hover.multitapLive"] = "송신기에 연결됨 — 꽂힌 가전이 함께 정산됩니다",
+            ["hover.multitapHint"] = "가전 코드를 들고 E로 꽂기 · 멀티탭 코드는 송신기에",
+            ["hover.multitapEffect"] = "가전 여러 개를 송신기 콘센트 하나로 정산 (충전 불필요)",
+            ["shop.soldOut"] = "품절입니다",
+            ["shop.tabMedical"] = "의료품",
+            ["shop.tabPower"] = "멀티탭",
+            ["settle.short"] = "목표 미달 · 더 연결하세요",
+            ["hud.plugTake"] = "코드 뽑기",
+            ["hud.plugSocket"] = "코드 꽂기",
+            ["hud.plugReturn"] = "코드 넣기",
             ["interact.corpse"] = "[좌클릭 연타] 플레이어 {0} 재세동 ({1}%) · [좌클릭 꾹] 시체 옮기기",
             ["interact.reviveOnly"] = "[좌클릭 연타] 플레이어 {0} 재세동 ({1}%)",
-            ["interact.shipMic"] = "우주선 방송 마이크 — [E 꾹] 모든 플레이어에게 방송",
+            ["interact.reviveHold"] = "[E 길게] 체력 {1}을 넣어 플레이어 {0} 부활 ({2}%)",
+            ["interact.reviveWeak"] = "체력이 {0}보다 많아야 부활시킬 수 있습니다",
+            ["interact.corpseCarry"] = "[좌클릭 꾹] 시체 옮기기",
+            ["interact.shipMic"] = "우주선 방송 마이크 — [V 꾹] 모든 플레이어에게 방송",
             ["interact.cctvPanel"] = "[좌클릭] CCTV 보기 (연결 {0} / {1})",
             ["interact.cctvOnline"] = "{0} — 우주선 CCTV 패널에 연결됨",
 
@@ -202,17 +260,39 @@ namespace CoOpHorror.Localization
 
         public static string Format(string key, params object[] args) => string.Format(Get(key), args);
 
+        // Fonts (SIL OFL 1.1, Resources/Fonts): Fusion Pixel 12px for text, one file per script so Chinese and
+        // Japanese glyph shapes are right; DSEG7 Classic (seven-segment) for plain numbers like 47% or 03:12.
         private static Font uiFont;
+        private static GameLanguage uiFontLanguage;
+        private static Font numberFont;
 
-        // Legacy uGUI font with OS fallbacks that cover Hangul (and later CJK languages).
         public static Font UiFont
         {
             get
             {
-                if (uiFont != null) return uiFont;
-                uiFont = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "맑은 고딕", "Microsoft YaHei", "Yu Gothic", "Arial" }, 16);
-                if (uiFont == null) uiFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                if (uiFont != null && uiFontLanguage == Current) return uiFont;
+                var file = Current switch
+                {
+                    GameLanguage.Japanese => "fusion-pixel-12px-proportional-ja",
+                    GameLanguage.ChineseSimplified => "fusion-pixel-12px-proportional-zh_hans",
+                    _ => "fusion-pixel-12px-proportional-ko", // Korean + Latin
+                };
+                uiFont = Resources.Load<Font>("Fonts/FusionPixel/" + file);
+                if (uiFont == null) uiFont = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Microsoft YaHei", "Yu Gothic", "Arial" }, 16);
+                uiFontLanguage = Current;
                 return uiFont;
+            }
+        }
+
+        // Fusion Pixel is drawn on a 12 px grid: snap sizes so the glyphs stay crisp (12, 24, 36...).
+        public static int PixelSize(int size) => Mathf.Max(12, Mathf.RoundToInt(size / 12f) * 12);
+
+        public static Font NumberFont
+        {
+            get
+            {
+                if (numberFont == null) numberFont = Resources.Load<Font>("Fonts/DSEG/DSEG7Classic-Bold");
+                return numberFont;
             }
         }
     }

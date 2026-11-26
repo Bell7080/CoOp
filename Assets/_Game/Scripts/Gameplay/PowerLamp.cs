@@ -33,7 +33,7 @@ namespace CoOpHorror.Gameplay
             {
                 // Comes on with a few flickers.
                 if (on && !Bulb.enabled) flickerUntil = Time.time + 0.6f;
-                Bulb.enabled = on && (Time.time > flickerUntil || Random.value > 0.5f);
+                Bulb.enabled = on; // comes on steadily
             }
             if (Glass == null) return;
             var charge = IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;

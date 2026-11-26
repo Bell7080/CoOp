@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // The ship's broadcast microphone. Look at it and hold E: every player hears you like an earpiece.
+    // The ship's broadcast microphone. Look at it and hold V: every player hears you like an earpiece.
     public sealed class ShipMic : Interactable
     {
         public static ShipMic Instance { get; private set; }

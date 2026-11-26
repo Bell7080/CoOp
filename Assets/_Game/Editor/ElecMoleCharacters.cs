@@ -25,7 +25,12 @@ namespace CoOpHorror.Editor
             if (importer.animationType != ModelImporterAnimationType.Generic) { importer.animationType = ModelImporterAnimationType.Generic; changed = true; }
             if (importer.materialImportMode != ModelImporterMaterialImportMode.None) { importer.materialImportMode = ModelImporterMaterialImportMode.None; changed = true; }
             if (!importer.importAnimation) { importer.importAnimation = true; changed = true; }
-            var clips = (importer.clipAnimations.Length > 0 ? importer.clipAnimations : importer.defaultClipAnimations).ToArray();
+            // Always rebuild the clip list from the file's takes (a re-export can change clip lengths).
+            var clips = importer.defaultClipAnimations.ToArray();
+            var old = importer.clipAnimations;
+            if (old.Length != clips.Length) changed = true;
+            else for (var i = 0; i < old.Length; i++)
+                if (!Mathf.Approximately(old[i].lastFrame, clips[i].lastFrame) || !Mathf.Approximately(old[i].firstFrame, clips[i].firstFrame)) changed = true;
             foreach (var clip in clips)
             {
                 var shortName = clip.name.Contains("|") ? clip.name.Substring(clip.name.LastIndexOf('|') + 1) : clip.name;

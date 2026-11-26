@@ -11,9 +11,9 @@ namespace CoOpHorror.Gameplay
     // Charged: hold the left button to lift it with telekinesis (Grabbable), or take its plug (CordPlug) and
     // pull the cord to the transmitter. Knocks and being dragged by the cord lower its value.
     // Tiny appliances fit in the inventory. Once its plug is in the transmitter, settlement swallows it.
-    public sealed class Appliance : Grabbable
+    public sealed class Appliance : Grabbable, IChargeGauge
     {
-        public const float ChargeRate = 25f;      // power per second per charging player
+        public const float ChargeRate = 10f;      // power per second per charging player (2-4 s per item)
         public const float FailStall = 2f;
         public const float FailNoiseRadius = 9f;
         public const float ImpactLossPerSpeed = 0.035f; // share of base value lost per m/s above the impact speed
@@ -33,6 +33,9 @@ namespace CoOpHorror.Gameplay
         public Renderer Indicator;
         public Light Glow;
         public bool StartsHidden;                 // salvage from an InstalledDevice: appears when ripped off
+        // Power strip (멀티탭): other appliances' plugs go into these outlets; plugged into the transmitter it
+        // settles everything plugged into it. Bought at the ship's terminal (it waits hidden until delivered).
+        public Transform[] Outlets;
 
         public readonly NetworkVariable<float> Charge = new(0f);
         public readonly NetworkVariable<int> Value = new(0);
@@ -44,8 +47,82 @@ namespace CoOpHorror.Gameplay
         public bool IsCharged => Charge.Value >= Capacity - 0.01f;
         public bool IsStored => IsSpawned && StoredBy.Value != NoOwner;
         public bool IsPlugged => Plug != null && Plug.IsSocketed;
+        public bool IsMultitap => Outlets != null && Outlets.Length > 0;
+
+        // Plugged into the transmitter, directly or through a power strip that is: settles (flies in).
+        public bool InSettlement
+        {
+            get
+            {
+                if (Plug == null || !Plug.IsSocketed) return false;
+                if (Plug.InTransmitter) return true;
+                var host = Plug.HostTap;
+                return host != null && host != this && host.Plug != null && host.Plug.InTransmitter;
+            }
+        }
+
+        // What this is worth at settlement: its own value, or for a power strip what is plugged into it.
+        public int SettleValue => IsMultitap ? OutletValue : Value.Value;
+
+        public int OutletValue
+        {
+            get
+            {
+                var sum = 0;
+                foreach (var p in CordPlug.All)
+                    if (p.IsSocketed && p.HostTap == this && p.Appliance != null && !p.Appliance.IsMultitap) sum += p.Appliance.Value.Value;
+                return sum;
+            }
+        }
+
+        public int OutletsUsed
+        {
+            get
+            {
+                var used = 0;
+                foreach (var p in CordPlug.All) if (p.IsSocketed && p.HostTap == this) used++;
+                return used;
+            }
+        }
+
+        private bool OutletUsed(int index)
+        {
+            foreach (var p in CordPlug.All) if (p.IsSocketed && p.HostTap == this && p.Socket.Value == index) return true;
+            return false;
+        }
+
+        public int FreeOutlet()
+        {
+            if (!IsMultitap) return -1;
+            for (var i = 0; i < Outlets.Length; i++) if (!OutletUsed(i)) return i;
+            return -1;
+        }
+
+        // A plug standing in outlet i: pins down into the strip.
+        public Pose OutletPose(int index)
+        {
+            if (!IsMultitap || index < 0 || index >= Outlets.Length || Outlets[index] == null) return new Pose(transform.position, transform.rotation);
+            var up = transform.up;
+            return new Pose(Outlets[index].position + up * 0.062f, Quaternion.LookRotation(-up, transform.right));
+        }
+
+        // Can this power strip take that plug right now? (Not its own, not another strip, a charged appliance.)
+        public bool Accepts(CordPlug plug) =>
+            IsMultitap && IsSpawned && !IsGone && plug != null && plug.Appliance != null && plug.Appliance != this
+            && !plug.Appliance.IsMultitap && plug.Appliance.IsCharged && FreeOutlet() >= 0;
+
+        // Server: the holder pushes the plug into the next free outlet.
+        public bool ServerAcceptPlug(CordPlug plug)
+        {
+            if (!IsServer || !Accepts(plug)) return false;
+            plug.ServerSocketInto(this, FreeOutlet());
+            ProtoAudio.Play(ProtoSound.Click, transform.position, 1f);
+            return true;
+        }
         public bool IsGone => IsSpawned && (Swallowed.Value || StoredBy.Value != NoOwner || (StartsHidden && !Revealed.Value));
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
+        public float GaugeFraction => IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
+        public bool GaugeCharging => false; // the gauge shows while the charge is changing
         public override string DisplayName => GameText.Get(NameKey);
         public override bool UsesSkillChecks => IsSpawned && !IsCharged && !IsGone;
         public override bool StickyHold => IsCharged;
@@ -68,7 +145,11 @@ namespace CoOpHorror.Gameplay
             All.Add(this);
             homeScale = transform.localScale;
             allColliders = GetComponentsInChildren<Collider>(true);
-            renderers = GetComponentsInChildren<Renderer>(true);
+            // Only the renderers that are on in the scene: the primitive stand-ins under a dressed model are
+            // switched off at build time and must stay off (they are larger than the model and would cover it).
+            var shown = new List<Renderer>();
+            foreach (var r in GetComponentsInChildren<Renderer>(true)) if (r.enabled) shown.Add(r);
+            renderers = shown.ToArray();
             block = new MaterialPropertyBlock();
         }
 
@@ -107,6 +188,22 @@ namespace CoOpHorror.Gameplay
             var sync = GetComponent<Unity.Netcode.Components.NetworkTransform>();
             if (sync != null && sync.CanCommitToTransform) sync.Teleport(from.position, from.rotation, transform.localScale);
             Body.linearVelocity = from.forward * 1.2f + Vector3.up * 0.5f;
+        }
+
+        // "TV · 가치 120" / "충전 필요 · 2명이 들어야 함 · 가방에 넣을 수 있음"
+        public override string HoverInfo(PlayerInteractor who)
+        {
+            if (!IsSpawned || IsGone || HeldBy(who)) return string.Empty;
+            if (IsMultitap)
+                return GameText.Format("hover.multitap", DisplayName, OutletsUsed, Outlets.Length, OutletValue)
+                    + "\n" + GameText.Get(Plug != null && Plug.InTransmitter ? "hover.multitapLive" : "hover.multitapHint");
+            var head = Value.Value < BaseValue
+                ? GameText.Format("hover.applianceDamaged", DisplayName, Value.Value, BaseValue)
+                : GameText.Format("hover.appliance", DisplayName, Value.Value);
+            var tags = new List<string> { GameText.Get(IsCharged ? "hover.charged" : "hover.needsCharge") };
+            if (Weight > 1) tags.Add(GameText.Format("hover.heavy", Weight));
+            if (Tiny) tags.Add(GameText.Get("hover.tiny"));
+            return head + "\n" + string.Join(" · ", tags);
         }
 
         public override InteractKind Describe(PlayerInteractor who, out string prompt)
@@ -194,7 +291,7 @@ namespace CoOpHorror.Gameplay
         }
 
         // Inventory. Only tiny appliances with their plug stowed; the holder must be the only one.
-        public bool CanStore => Tiny && !IsGone && !pulling && (Plug == null || Plug.State.Value == PlugState.Stowed);
+        public bool CanStore => Tiny && !IsGone && !pulling && (Plug == null || Plug.State.Value == PlugState.Stowed) && (!IsMultitap || OutletsUsed == 0);
 
         public void ServerStore(PlayerInteractor who, int slot)
         {
@@ -227,7 +324,8 @@ namespace CoOpHorror.Gameplay
             }
 
             var transmitter = Transmitter.Instance;
-            var t = IsPlugged && transmitter != null ? transmitter.PullProgress : 0f;
+            // once the yank has started it finishes, whatever its cord does on the way
+            var t = (InSettlement || pulling) && transmitter != null ? transmitter.PullProgress : 0f;
             if (t <= 0f || Swallowed.Value) return;
             if (!pulling)
             {
@@ -249,7 +347,7 @@ namespace CoOpHorror.Gameplay
 
             var gone = IsGone;
             var transmitter = Transmitter.Instance;
-            var t = IsPlugged && transmitter != null ? transmitter.PullProgress : 0f;
+            var t = InSettlement && transmitter != null ? transmitter.PullProgress : 0f;
             transform.localScale = homeScale * Mathf.Lerp(1f, 0.15f, t * t);
             foreach (var r in renderers) if (r != null) r.enabled = !gone;
             foreach (var c in allColliders) if (c != null) c.enabled = !gone;

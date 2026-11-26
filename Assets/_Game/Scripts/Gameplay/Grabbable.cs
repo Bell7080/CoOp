@@ -18,13 +18,12 @@ namespace CoOpHorror.Gameplay
     {
         public const int MaxHolders = 3;
         public const float HoldDistance = 1.7f;
-        public const float Spring = 55f;          // acceleration per metre of error
-        public const float Damping = 9f;
+        public const float Spring = 24f;          // acceleration per metre of error (soft: things lag behind and bob)
+        public const float Damping = 4.6f;        // under-damped: a jump or a sudden turn makes the load swing
         public const float TurnRate = 10f;
         public const float MaxSpeed = 11f;
         public const float BreakDistance = 3.2f;  // stuck this far from the hold point: that holder lets go
         public const float ImpactSpeed = 2.6f;    // collisions (or drops) faster than this count as a hit
-        public const int BeamPoints = 9;
 
         public static readonly List<Grabbable> All = new();
 
@@ -42,10 +41,6 @@ namespace CoOpHorror.Gameplay
         private float nextImpactFx;
         private readonly List<PlayerInteractor> holders = new();
         private readonly HashSet<CharacterController> ignored = new();
-        private readonly List<LineRenderer> beams = new();
-        private readonly Vector3[] beamPoints = new Vector3[BeamPoints];
-        private float nextBeamJitter;
-        private static Material beamMaterial;
 
         public bool IsHeld => IsSpawned && Holders.Count > 0;
         public float Lift => Mathf.Clamp01(Holders.Count / (float)Mathf.Max(1, Weight));
@@ -170,6 +165,7 @@ namespace CoOpHorror.Gameplay
                 if (sync != null) sync.Teleport(homePosition, homeRotation, transform.localScale);
                 resetPending = false;
             }
+            if (!Body.isKinematic && Holders.Count == 0) ServerBump();
             if (Body.isKinematic || Holders.Count == 0) return;
 
             var list = ResolveHolders();
@@ -190,9 +186,14 @@ namespace CoOpHorror.Gameplay
 
             // Weight: the pull weakens with too few holders and gravity is only partly cancelled, so heavy
             // things sag and, under-held, get half-lifted and dragged with effort.
-            var pull = 0.35f + 0.65f * lift;
-            var accel = (target - center) * (Spring * pull) - Body.linearVelocity * Damping;
-            var carried = lift >= 1f ? (Weight > 1 ? 0.92f : 1f) : lift * 0.8f;
+            var pull = (0.35f + 0.65f * lift) / Mathf.Sqrt(Mathf.Max(1, Weight)); // heavier = lazier
+            // Damp only relative to the holder's own motion, so the load follows with a delay and overshoots.
+            var holderVelocity = Vector3.zero;
+            foreach (var p in list) holderVelocity += p.MotionVelocity;
+            holderVelocity /= list.Count;
+            var accel = (target - center) * (Spring * pull) - (Body.linearVelocity - holderVelocity * 0.35f) * Damping;
+            // Gravity is never fully cancelled: everything droops a little and reacts to bumps.
+            var carried = lift >= 1f ? (Weight > 1 ? 0.88f : 0.95f) : lift * 0.8f;
             if (lift < 1f) accel.y = Mathf.Min(accel.y, 5f * lift);
             accel -= Physics.gravity * carried;
             Body.AddForce(accel, ForceMode.Acceleration);
@@ -208,6 +209,32 @@ namespace CoOpHorror.Gameplay
             }
         }
 
+        // Loose objects are touchy: walking or running into one shoves it (players' controllers don't push
+        // rigidbodies on their own), monsters barging past knock things over.
+        private void ServerBump()
+        {
+            var bounds = Body.GetComponent<Collider>() != null ? Body.GetComponent<Collider>().bounds : new Bounds(Body.worldCenterOfMass, Vector3.one * 0.5f);
+            var reach = Mathf.Max(bounds.extents.x, bounds.extents.z) + 0.5f;
+            void Shove(Vector3 position, Vector3 velocity, float strength)
+            {
+                var offset = Body.worldCenterOfMass - position;
+                offset.y = 0f;
+                var distance = offset.magnitude;
+                if (distance > reach || distance < 0.001f) return;
+                var dir = offset / distance;
+                var into = Vector3.Dot(velocity, dir);
+                if (into <= 0.2f) return;
+                var push = dir * (into * strength / Mathf.Max(1, Weight)) + Vector3.up * (into * 0.25f);
+                Body.AddForceAtPosition(push, Body.worldCenterOfMass + Vector3.up * 0.15f, ForceMode.Acceleration);
+            }
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned && !p.IsDead.Value && p.TryGetComponent<PlayerInteractor>(out var pi))
+                    Shove(p.transform.position, pi.MotionVelocity, 9f);
+            foreach (var m in TempMonster.All)
+                if (m != null && m.IsSpawned && m.TryGetComponent<UnityEngine.AI.NavMeshAgent>(out var agent))
+                    Shove(m.transform.position, agent.velocity, 16f);
+        }
+
         private void OnCollisionEnter(Collision collision)
         {
             if (!IsServer || !IsSpawned) return;
@@ -219,56 +246,23 @@ namespace CoOpHorror.Gameplay
             ImpactFxRpc(Mathf.Clamp01((speed - ImpactSpeed) / 8f));
         }
 
-        // Every peer: a crackling current beam from each holder's paw to the object.
+        // Every peer: a gas shell around the object and a gas stream with a crackling current from each paw.
         protected virtual void LateUpdate()
         {
             var list = IsSpawned ? ResolveHolders() : holders;
             if (!IsSpawned) list.Clear();
-            while (beams.Count < list.Count) beams.Add(CreateBeam());
-            var jitter = Time.time >= nextBeamJitter;
-            if (jitter) nextBeamJitter = Time.time + 0.045f;
-            var center = transform.TransformPoint(BeamTargetLocal);
-            for (var i = 0; i < beams.Count; i++)
-            {
-                var line = beams[i];
-                var on = i < list.Count;
-                line.enabled = on;
-                if (!on || !jitter) continue;
-                var from = list[i].EyePosition + list[i].AimRotation * new Vector3(0.12f, -0.3f, 0.38f);
-                for (var p = 0; p < BeamPoints; p++)
-                {
-                    var f = p / (BeamPoints - 1f);
-                    var point = Vector3.Lerp(from, center, f);
-                    if (p > 0 && p < BeamPoints - 1) point += Random.insideUnitSphere * (0.09f * Mathf.Sin(f * Mathf.PI));
-                    beamPoints[p] = point;
-                }
-                line.SetPositions(beamPoints);
-                var flicker = 0.65f + Random.value * 0.35f;
-                line.startColor = new Color(0.55f, 0.95f, 1f, flicker);
-                line.endColor = new Color(0.9f, 1f, 1f, flicker * 0.8f);
-            }
+            if (list.Count == 0 && aura == null) return;
+            if (aura == null) aura = TelekinesisAura.For(transform);
+            pawPoints.Clear();
+            foreach (var p in list) pawPoints.Add(p.EyePosition + p.AimRotation * new Vector3(0.12f, -0.3f, 0.38f));
+            aura.Show(pawPoints, Lift < 1f ? 1f : (Weight > 1 ? 0.5f : 0f));
         }
+
+        private TelekinesisAura aura;
+        private readonly List<Vector3> pawPoints = new();
 
         // Where beams attach, in local space (subclasses aim at their body's centre).
         protected virtual Vector3 BeamTargetLocal => Vector3.up * 0.25f;
-
-        private LineRenderer CreateBeam()
-        {
-            if (beamMaterial == null) beamMaterial = new Material(Shader.Find("Sprites/Default"));
-            var go = new GameObject("CurrentBeam");
-            go.transform.SetParent(transform, false);
-            var line = go.AddComponent<LineRenderer>();
-            line.sharedMaterial = beamMaterial;
-            line.positionCount = BeamPoints;
-            line.useWorldSpace = true;
-            line.startWidth = 0.035f;
-            line.endWidth = 0.015f;
-            line.numCapVertices = 1;
-            line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            line.receiveShadows = false;
-            line.enabled = false;
-            return line;
-        }
 
         // Server: a hard knock (subclasses lose value, etc.).
         protected virtual void ServerImpact(float speed) { }

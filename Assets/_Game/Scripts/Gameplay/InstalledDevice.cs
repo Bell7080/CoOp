@@ -10,9 +10,9 @@ namespace CoOpHorror.Gameplay
     // once it works, holding the left button on it again rips it off its mount. That takes a while (several
     // players are faster), makes some noise, switches it off for good and drops its salvage: a charged,
     // sellable item with a battery cable (a hidden Appliance placed with it) that plugs into the transmitter.
-    public abstract class InstalledDevice : Interactable
+    public abstract class InstalledDevice : Interactable, IChargeGauge
     {
-        public const float ChargeRate = 15f;
+        public const float ChargeRate = 6f;
         public const float DetachNoiseRadius = 7f;
 
         public static readonly List<InstalledDevice> Devices = new();
@@ -28,6 +28,8 @@ namespace CoOpHorror.Gameplay
 
         public bool Online => IsSpawned && !Detached.Value && Charge.Value >= Capacity - 0.01f;
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
+        public float GaugeFraction => IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
+        public bool GaugeCharging => false;
         public int DetachPercent => Mathf.FloorToInt(Mathf.Clamp01(DetachProgress.Value) * 100f);
         public abstract string DisplayName { get; }
 

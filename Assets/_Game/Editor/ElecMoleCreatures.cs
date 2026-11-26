@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using CoOpHorror.Gameplay;
 using CoOpHorror.Player;
 using Unity.Netcode.Components;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.AI;
 using Object = UnityEngine.Object;
@@ -63,7 +64,9 @@ namespace CoOpHorror.Editor
             {
                 waypoints[i] = new GameObject("Waypoint_" + i).transform;
                 waypoints[i].SetParent(waypointRoot, false);
-                waypoints[i].position = route[i];
+                // the layout may have put a structure on a planned point: use the nearest walkable spot
+                var spot = NearestWalkable(route[i]);
+                waypoints[i].position = UnityEngine.AI.NavMesh.SamplePosition(spot, out var hit, 2f, UnityEngine.AI.NavMesh.AllAreas) ? hit.position : spot;
             }
             var monster = root.AddComponent<TempMonster>();
             monster.Waypoints = waypoints;
@@ -110,8 +113,13 @@ namespace CoOpHorror.Editor
                 rig.FastState = "Chase";
                 rig.AttackState = "Attack";
                 rig.FastSpeed = 99f;
-                rig.ClipSpeedPerMetre = 0.6f;
-                Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.4f, 14f, 1.4f, 22, null);
+                rig.ClipSpeedPerMetre = 0.9f;        // ~1.1 m per walk cycle
+                rig.FastClipSpeedPerMetre = 0.5f;    // long bounding strides while charging
+                rig.StepsPerCycle = 2;               // thump, thump
+                rig.StepVolume = 0.45f;
+                var tv = Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.4f, 14f, 1.4f, 22, null);
+                // spots you, bounces frantically and rams you head first from far away
+                tv.LungeRange = 9f; tv.LungeSpeed = 7.5f; tv.LungeSeconds = 1.3f; tv.LungeCooldown = 4f; tv.Knockback = 13f; tv.KnockUp = 5f;
                 return;
             }
             var plastic = Mat("TvPlastic", new Color(0.32f, 0.25f, 0.18f), tex: Texture("Wood"), tiling: 1f);
@@ -192,8 +200,13 @@ namespace CoOpHorror.Editor
                 rig.FastState = "Chase";
                 rig.AttackState = "Attack";
                 rig.FastSpeed = 99f;
-                rig.ClipSpeedPerMetre = 0.75f;
-                Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 16f, 1.0f, 25, null);
+                rig.ClipSpeedPerMetre = 1f;          // a hand reaches ~1 m per crawl cycle: planted hands don't slide
+                rig.FastClipSpeedPerMetre = 0.48f;
+                rig.StepsPerCycle = 2;
+                rig.StepVolume = 0.2f;
+                var fan = Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 16f, 1.0f, 25, null);
+                // scuttles up fast and shoves its face into yours
+                fan.LungeRange = 5.5f; fan.LungeSpeed = 9f; fan.LungeSeconds = 0.7f; fan.LungeCooldown = 3f; fan.Knockback = 10f; fan.KnockUp = 6f;
                 return;
             }
             var plastic = Mat("FanPlastic", new Color(0.75f, 0.78f, 0.72f));
@@ -321,13 +334,36 @@ namespace CoOpHorror.Editor
                     Shape(paw, "Claw", PrimitiveType.Cube, new Vector3(i * 0.3f, -0.1f, 0.55f), Vector3.zero, new Vector3(0.15f, 0.2f, 0.4f), claw);
                 return paw;
             }
+            // First-person hands: the mole's own arm (cut out by tools/blender/make_arm.py), mirrored for the
+            // left, coming up from the bottom corners of the view. Falls back to the old paws.
+            Transform Arm(string n, float side)
+            {
+                var source = AssetDatabase.LoadAssetAtPath<GameObject>(CharacterDir + "/MoleAlien/MoleArm.fbx");
+                if (source == null) return Paw(n, side);
+                var holder = new GameObject(n).transform;
+                holder.SetParent(pivot, false);
+                holder.localPosition = new Vector3(side * 0.3f, -0.33f, 0.16f);
+                var model = (GameObject)PrefabUtility.InstantiatePrefab(source);
+                model.transform.SetParent(holder, false);
+                var renderer = model.GetComponentInChildren<Renderer>();
+                var filter = model.GetComponentInChildren<MeshFilter>();
+                renderer.sharedMaterial = CharacterMaterial("MoleAlien", Color.white);
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                var scale = new Vector3(side < 0f ? -0.95f : 0.95f, 0.95f, 0.95f);
+                model.transform.localScale = scale;
+                // Turn the arm so it reaches forward and a little inward from the shoulder.
+                var centre = model.transform.InverseTransformPoint(filter.transform.TransformPoint(filter.sharedMesh.bounds.center));
+                var reach = Vector3.Scale(centre, scale);
+                model.transform.localRotation = Quaternion.FromToRotation(reach, new Vector3(-side * 0.35f, 0.05f, 1f).normalized);
+                return holder;
+            }
             var visual = root.GetComponent<PlayerAvatarVisual>();
             visual.BodyRoot = body;
             visual.Skin = skinParts.ToArray();
             visual.Details = details.ToArray();
             visual.AimPivot = pivot;
-            visual.LeftFist = Paw("LeftFist", -1f);
-            visual.RightFist = Paw("RightFist", 1f);
+            visual.LeftFist = Arm("LeftFist", -1f);
+            visual.RightFist = Arm("RightFist", 1f);
             visual.Body = null;
             visual.Head = null;
             root.GetComponent<FirstPersonController>().AimPivot = pivot;

@@ -38,6 +38,7 @@ namespace CoOpHorror.Player
         private Vector3 lastPosition;
         private Vector3 squash = Vector3.one;
         private Vector3 squashVelocity;
+        private Vector3 lastVelocity, smoothedAccel, lean, leanVelocity;
 
         private void Awake()
         {
@@ -50,7 +51,7 @@ namespace CoOpHorror.Player
         {
             isOwnerView = ownerView;
             bodyColor = Palette[(int)(ownerId % (ulong)Palette.Length)];
-            handColor = Color.Lerp(bodyColor, new Color(1f, 0.85f, 0.8f), 0.45f);
+            handColor = bodyColor; // the first-person hands are the body's own arms
             var grey = bodyColor.grayscale;
             noseColor = Color.Lerp(bodyColor, new Color(grey, grey, grey), 0.5f) * 0.9f;
             noseColor.a = 1f;
@@ -89,22 +90,33 @@ namespace CoOpHorror.Player
             ApplyColors(Time.time < flashUntil);
             if (BodyRoot == null) return;
 
-            // Jelly squash and stretch from the actual movement (works for remote players too).
+            // Firm jelly: the body barely wobbles by itself, but leans and squashes against sudden changes of
+            // movement (inertia), then springs back. Works for remote players too (from the replicated motion).
             var dt = Mathf.Max(Time.deltaTime, 0.0001f);
             var velocity = (transform.position - lastPosition) / dt;
             lastPosition = transform.position;
+            if (velocity.sqrMagnitude > 900f) velocity = lastVelocity; // teleports
+            var accel = (velocity - lastVelocity) / dt;
+            lastVelocity = velocity;
+            smoothedAccel = Vector3.Lerp(smoothedAccel, Vector3.ClampMagnitude(accel, 40f), 1f - Mathf.Exp(-12f * dt));
             var flat = new Vector2(velocity.x, velocity.z).magnitude;
             Vector3 target;
             if (motor != null && motor.IsSpawned && motor.Crouched.Value) target = Crouched;
             else
             {
-                // Soft but firm: a little give when landing and jumping, a faint wobble when running.
-                var stretch = Mathf.Clamp(velocity.y * 0.02f, -0.1f, 0.1f);
-                var wobble = Mathf.Sin(Time.time * 11f) * 0.015f * Mathf.Clamp01(flat / 4f);
-                target = new Vector3(1f - stretch * 0.5f - wobble, 1f + stretch + wobble, 1f - stretch * 0.5f - wobble);
+                var stretch = Mathf.Clamp(velocity.y * 0.008f, -0.05f, 0.05f);
+                var wobble = Mathf.Sin(Time.time * 11f) * 0.004f * Mathf.Clamp01(flat / 4f);
+                var jolt = Mathf.Clamp01(new Vector2(smoothedAccel.x, smoothedAccel.z).magnitude / 30f) * 0.05f;
+                target = new Vector3(1f - stretch * 0.5f - wobble + jolt, 1f + stretch + wobble - jolt, 1f - stretch * 0.5f - wobble + jolt);
             }
-            squash = Vector3.SmoothDamp(squash, target, ref squashVelocity, 0.07f, 40f, dt);
+            squash = Vector3.SmoothDamp(squash, target, ref squashVelocity, 0.08f, 40f, dt);
             BodyRoot.localScale = squash;
+
+            // Lean away from the acceleration (start, stop, sidestep, turn), damped spring back.
+            var localAccel = transform.InverseTransformDirection(new Vector3(smoothedAccel.x, 0f, smoothedAccel.z));
+            var leanTarget = new Vector3(Mathf.Clamp(-localAccel.z * 0.35f, -9f, 9f), 0f, Mathf.Clamp(localAccel.x * 0.35f, -9f, 9f));
+            lean = Vector3.SmoothDamp(lean, leanTarget, ref leanVelocity, 0.12f, 200f, dt);
+            BodyRoot.localRotation = Quaternion.Euler(lean.x, 0f, lean.z);
         }
 
         private void ApplyColors(bool flashing)
@@ -120,8 +132,8 @@ namespace CoOpHorror.Player
                 Tint(Head, skin);
             }
             var paw = flashing && !isOwnerView ? red : handColor;
-            Tint(LeftFist != null ? LeftFist.GetComponent<Renderer>() : null, paw);
-            Tint(RightFist != null ? RightFist.GetComponent<Renderer>() : null, paw);
+            Tint(LeftFist != null ? LeftFist.GetComponentInChildren<Renderer>() : null, paw);
+            Tint(RightFist != null ? RightFist.GetComponentInChildren<Renderer>() : null, paw);
         }
 
         private void Tint(Renderer r, Color c)

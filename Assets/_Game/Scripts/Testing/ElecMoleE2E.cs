@@ -539,22 +539,20 @@ namespace CoOpHorror.Testing
             var victim = PlayerHealth.All.First(p => p.OwnerClientId == clientId);
             var body = Corpse.Bodies.First(c => c.PlayerClientId.Value == clientId);
             yield return WalkTo(body.transform.position + (Me.transform.position - body.transform.position).normalized * 1.3f, 0.3f);
-            var hits = 0;
-            var until = Time.time + 25f;
-            while (victim.IsDead.Value && Time.time < until)
-            {
-                if (body != null && body.IsSpawned)
-                {
-                    yield return Face(body.transform.position + Vector3.up * 0.3f);
-                    Me.AutomationTarget = body;
-                    Me.AutomationPress();
-                    hits++;
-                }
-                yield return new WaitForSeconds(0.3f);
-            }
+            // Revive = hold E on the body (PlayerReviver), paying 30 of our own health.
+            var reviver = Me.GetComponent<PlayerReviver>();
+            var myHealth = Me.GetComponent<PlayerHealth>();
+            var before = myHealth.Health.Value;
+            var until = Time.time + 12f;
+            yield return Face(body.transform.position + Vector3.up * 0.3f);
+            Me.AutomationTarget = body;
+            reviver.AutomationHold = true;
+            while (victim.IsDead.Value && Time.time < until) yield return null;
+            reviver.AutomationHold = false;
             Me.AutomationTarget = null;
-            if (victim.IsDead.Value) { Fail("still dead after " + hits + " hits"); yield break; }
-            message = $"revived after {hits} hits, hp {victim.Health.Value}";
+            if (victim.IsDead.Value) { Fail("still dead after holding E"); yield break; }
+            yield return new WaitForSeconds(0.5f);
+            message = $"revived by holding E, hp {victim.Health.Value}, reviver hp {before}->{myHealth.Health.Value}";
         }
 
         private IEnumerator CarryCorpse(ulong clientId)

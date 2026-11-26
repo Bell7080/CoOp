@@ -17,6 +17,11 @@ namespace CoOpHorror.Gameplay
 
         public Transform Rotor;
         public Light Lamp;
+        public Transform Body;       // engine model: chugs while it runs
+        private Vector3 bodyRest;
+        private bool bodyRestKnown;
+        private float chugPhase;
+        private float nextChug;
 
         public readonly NetworkVariable<int> Crankers = new(0);
 
@@ -67,6 +72,7 @@ namespace CoOpHorror.Gameplay
             var crankers = IsSpawned && !stalled ? Crankers.Value : 0;
             spinSpeed = Mathf.MoveTowards(spinSpeed, crankers * 360f, (stalled ? 2000f : 720f) * Time.deltaTime);
             if (Rotor != null) Rotor.Rotate(spinSpeed * Time.deltaTime, 0f, 0f, Space.Self);
+            Chug();
             if (Lamp == null) return;
             if (stalled)
             {
@@ -78,8 +84,28 @@ namespace CoOpHorror.Gameplay
             var grid = PowerGrid.Instance;
             var fraction = grid != null && grid.IsSpawned ? grid.Fraction : 0f;
             Lamp.color = new Color(1f, 0.65f, 0.25f);
+            if (CrashIntro.Blackout) { Lamp.intensity = 0f; return; }
             // Always a small glow so the generator can be found in the dark ship.
             Lamp.intensity = 2.5f + fraction * 1.5f + (crankers > 0 ? 0.6f + Mathf.PingPong(Time.time * 6f, 0.5f) : 0f);
+        }
+
+        // Chug-chug: the engine block bounces with each stroke while cranked, and idles faintly once charged.
+        private void Chug()
+        {
+            if (Body == null) return;
+            if (!bodyRestKnown) { bodyRest = Body.localPosition; bodyRestKnown = true; }
+            var grid = PowerGrid.Instance;
+            var charged = grid != null && grid.IsSpawned ? grid.Fraction : 0f;
+            var rate = spinSpeed / 360f * 4f + (charged > 0.3f ? 1.2f : 0f); // strokes per second
+            chugPhase += rate * Time.deltaTime;
+            var amount = Mathf.Clamp01(spinSpeed / 360f) * 0.025f + (charged > 0.3f ? 0.004f : 0f);
+            var stroke = Mathf.Pow(Mathf.Abs(Mathf.Sin(chugPhase * Mathf.PI)), 6f);
+            Body.localPosition = bodyRest + Vector3.up * stroke * amount + Random.insideUnitSphere * amount * 0.15f;
+            if (spinSpeed > 60f && Time.time >= nextChug)
+            {
+                nextChug = Time.time + 1f / Mathf.Max(rate, 0.5f);
+                ProtoAudio.PlayPitched(ProtoSound.Clunk, transform.position, 0.35f, 0.8f + Random.value * 0.2f);
+            }
         }
     }
 }

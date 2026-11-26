@@ -25,8 +25,14 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
+    - _Aberration: 0.004
     - _Dither: 0.6
+    - _Grain: 0.06
     - _Levels: 22
+    - _Lift: 0.75
+    - _Outline: 0.55
+    - _OutlineFade: 22
+    - _OutlineThreshold: 0.12
     - _Vignette: 1.1
     m_Colors: []
   m_BuildTextureStacks: []

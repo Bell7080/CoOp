@@ -59,15 +59,16 @@ namespace CoOpHorror.Player
             if (IsServer && On.Value)
             {
                 var stage = StageDirector.Instance;
-                if (Dead || (grid != null && grid.IsEmpty) || (stage != null && stage.IsLeftBehind(health))) On.Value = false;
+                // Stays on even when the grid runs dry (just dimmer); only death or being left behind turns it off.
+                if (Dead || (stage != null && stage.IsLeftBehind(health))) On.Value = false;
                 else if (grid != null) grid.ServerTake(DrainPerSecond * Time.deltaTime);
             }
 
             beam.enabled = On.Value;
             if (!beam.enabled) return;
-            // Weak, flickering beam when the shared grid is nearly empty.
+            // Steady beam; a little dimmer when the shared grid is (nearly) empty. No flicker.
             var low = grid != null && grid.IsSpawned && grid.Fraction < LowPowerFraction;
-            beam.intensity = low ? (Random.value < 0.08f ? 1f : BeamIntensity * 0.45f) : BeamIntensity;
+            beam.intensity = low ? BeamIntensity * 0.65f : BeamIntensity;
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
@@ -76,7 +77,7 @@ namespace CoOpHorror.Player
             if (Dead) return;
             var grid = PowerGrid.Instance;
             var stage = StageDirector.Instance;
-            if (!On.Value && ((grid != null && grid.IsEmpty) || (stage != null && stage.IsLeftBehind(health)))) return;
+            if (!On.Value && stage != null && stage.IsLeftBehind(health)) return;
             On.Value = !On.Value;
         }
     }

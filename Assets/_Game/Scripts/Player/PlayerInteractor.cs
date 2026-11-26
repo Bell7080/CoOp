@@ -37,6 +37,61 @@ namespace CoOpHorror.Player
         public void AutomationPress() => automationPress = true;
         public void AutomationDrop() => automationDrop = true;
         public void AutomationSkillPress() => automationSkill = true;
+        public void AutomationPlugKey() => automationPlugKey = true;
+        private bool automationPlugKey;
+
+        // E on an appliance (or a plug): pull the plug out into your hand - also out of a power strip, or out of
+        // the transmitter before the settlement starts. E while carrying a plug: plug it into the transmitter or
+        // the power strip you are looking at, or let it reel back into its appliance.
+        public enum PlugAction : byte { None, Take, Socket, SocketTap, Return }
+
+        public PlugAction PlugKeyAction
+        {
+            get
+            {
+                if (!IsSpawned || !Alive || ownerHold != null) return PlugAction.None;
+                var held = HeldPlug;
+                if (held != null)
+                {
+                    if (Target is Transmitter && TargetKind == InteractKind.Press) return PlugAction.Socket;
+                    if (Target is Appliance tap && tap.Accepts(held)) return PlugAction.SocketTap;
+                    return PlugAction.Return;
+                }
+                return PlugToTake() != null ? PlugAction.Take : PlugAction.None;
+            }
+        }
+
+        private CordPlug PlugToTake()
+        {
+            if (HandsFull) return null;
+            var plug = Target as CordPlug ?? (Target as Appliance)?.Plug;
+            if (plug == null || !plug.IsSpawned || plug.Appliance == null || !plug.Appliance.IsSpawned || plug.Appliance.IsGone) return null;
+            var state = plug.State.Value;
+            if (state == PlugState.Stowed || state == PlugState.Retracting) return plug;
+            // a plugged-in cord: only when the plug itself is within reach
+            var reach = Interactable.UseRange + 0.5f;
+            return state == PlugState.Socketed && plug.CanUnplug && (plug.transform.position - EyePosition).sqrMagnitude <= reach * reach ? plug : null;
+        }
+
+        private bool UsePlugKey()
+        {
+            switch (PlugKeyAction)
+            {
+                case PlugAction.Socket: UseRpc(Target.NetworkObject); return true;
+                case PlugAction.SocketTap: PlugIntoTapRpc(Target.NetworkObject); return true;
+                case PlugAction.Return: DropRpc(); return true;
+                case PlugAction.Take: UseRpc(PlugToTake().NetworkObject); return true;
+                default: return false;
+            }
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
+        private void PlugIntoTapRpc(NetworkObjectReference reference)
+        {
+            if (!Alive || !reference.TryGet(out var obj) || !obj.TryGetComponent<Appliance>(out var tap) || !tap.ServerInRange(this)) return;
+            var plug = HeldPlug;
+            if (plug != null) tap.ServerAcceptPlug(plug);
+        }
         public int SkillChecksSeen { get; private set; }
         public int SkillChecksMissed { get; private set; }
 
@@ -56,6 +111,19 @@ namespace CoOpHorror.Player
         private SkillCheck.State lastCheckState;
         private Interactable serverHold;  // host: what this player is holding
         private static readonly RaycastHit[] Hits = new RaycastHit[16];
+
+        // How fast this player moves (every peer, from the transform): carried loads lag behind it.
+        public Vector3 MotionVelocity { get; private set; }
+        private Vector3 motionLast;
+
+        private void FixedUpdate()
+        {
+            var position = transform.position;
+            var velocity = (position - motionLast) / Mathf.Max(Time.fixedDeltaTime, 0.0001f);
+            if (velocity.sqrMagnitude > 900f) velocity = Vector3.zero; // teleports
+            MotionVelocity = Vector3.Lerp(MotionVelocity, velocity, 0.5f);
+            motionLast = position;
+        }
 
         public Vector3 EyePosition => motor != null && motor.AimPivot != null ? motor.AimPivot.position : transform.position + Vector3.up * 0.72f;
         public Quaternion AimRotation => motor != null && motor.AimPivot != null ? motor.AimPivot.rotation : transform.rotation;
@@ -147,10 +215,12 @@ namespace CoOpHorror.Player
             var drop = (ready && k != null && k.qKey.wasPressedThisFrame) || automationDrop;
             var skill = (ready && k != null && k.spaceKey.wasPressedThisFrame) || automationSkill || AutoSkillPress();
             var rotate = (ready && m != null && m.rightButton.isPressed) || AutomationTurn != Vector2.zero;
-            automationPress = automationDrop = automationSkill = false;
+            var plugKey = (ready && k != null && k.eKey.wasPressedThisFrame && !PlayerReviver.LocalLookingAtBody) || automationPlugKey;
+            automationPress = automationDrop = automationSkill = automationPlugKey = false;
             if (!held) blockUntilRelease = false;
 
             var consumed = false;
+            if (plugKey && ownerHold == null) consumed = UsePlugKey();
             if (ownerHold != null)
             {
                 bool keep;
@@ -276,6 +346,7 @@ namespace CoOpHorror.Player
                     var c = Hits[i].collider;
                     if (c == null || c.transform.IsChildOf(transform) || Hits[i].distance >= nearest) continue;
                     var interactable = c.GetComponentInParent<Interactable>();
+                    if (interactable != null && !interactable.TargetedBy(c)) interactable = null;
                     if (carried != null && interactable == carried) continue;
                     if (c.isTrigger && interactable == null) continue;
                     nearest = Hits[i].distance;

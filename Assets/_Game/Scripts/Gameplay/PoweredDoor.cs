@@ -6,9 +6,9 @@ using UnityEngine.AI;
 
 namespace CoOpHorror.Gameplay
 {
-    // A closed door that opens once it is fed enough shared power (hold the left button). After that it is
-    // powered: a click opens or closes it (not while someone stands in the doorway). A powered door keeps
-    // sipping a little shared power, open or shut; with the grid empty it stays stuck where it is.
+    // A closed door worked from the buttons left of it (one inside, one outside). First it has to be fed enough
+    // shared power (hold the left button); after that a click opens or closes it (not while someone stands in
+    // the doorway). While shut it sips a little shared power; with the grid empty it stays stuck where it is.
     // The panel slides up; while closed it also blocks monster paths (NavMeshObstacle).
     public sealed class PoweredDoor : Interactable
     {
@@ -18,7 +18,9 @@ namespace CoOpHorror.Gameplay
 
         public float Capacity = 8f;
         public Transform Panel;
-        public Renderer Indicator;
+        public Renderer Indicator;            // inside button
+        public Renderer OutsideIndicator;     // outside button
+        public Collider[] Buttons;            // only these target the door; the panel is just a wall
 
         public readonly NetworkVariable<float> Charge = new(0f);
         public readonly NetworkVariable<bool> Open = new(false);
@@ -32,7 +34,9 @@ namespace CoOpHorror.Gameplay
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
         public bool Powered => Charge.Value >= Capacity - 0.01f;
         public const float DoorwayClearance = 1.1f;
-        public const float DrainPerSecond = 0.12f; // ~14 minutes for a full grid
+        public const float DrainPerSecond = 0.12f; // while shut: ~14 minutes for a full grid
+
+        public override bool TargetedBy(Collider c) => Buttons == null || Buttons.Length == 0 || System.Array.IndexOf(Buttons, c) >= 0;
 
         protected override void Awake()
         {
@@ -112,18 +116,20 @@ namespace CoOpHorror.Gameplay
 
         private void Update()
         {
-            if (IsServer && IsSpawned && Powered && PowerGrid.Instance != null)
+            if (IsServer && IsSpawned && Powered && !Open.Value && PowerGrid.Instance != null)
                 PowerGrid.Instance.ServerTake(DrainPerSecond * Time.deltaTime);
             var open = IsSpawned && Open.Value;
             slide = Mathf.MoveTowards(slide, open ? 1f : 0f, SlideSpeed / OpenHeight * Time.deltaTime);
             if (Panel != null) Panel.localPosition = panelHome + Vector3.up * (OpenHeight * slide);
             if (obstacle != null) obstacle.enabled = slide < 0.5f;
-            if (Indicator != null)
+            var t = IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
+            var color = open ? new Color(0.3f, 1f, 0.45f) : Color.Lerp(new Color(0.6f, 0.08f, 0.05f), new Color(1f, 0.8f, 0.2f), t);
+            foreach (var indicator in new[] { Indicator, OutsideIndicator })
             {
-                var t = IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
-                Indicator.GetPropertyBlock(block);
-                block.SetColor(BaseColor, open ? new Color(0.3f, 1f, 0.45f) : Color.Lerp(new Color(0.6f, 0.08f, 0.05f), new Color(1f, 0.8f, 0.2f), t));
-                Indicator.SetPropertyBlock(block);
+                if (indicator == null) continue;
+                indicator.GetPropertyBlock(block);
+                block.SetColor(BaseColor, color);
+                indicator.SetPropertyBlock(block);
             }
         }
     }

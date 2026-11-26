@@ -41,13 +41,15 @@ namespace CoOpHorror.Editor
         // The crashed ship (south-west room).
         private static class Ship
         {
-            public static readonly Vector3 Min = new(-36f, 0f, -28f);
-            public static readonly Vector3 Max = new(-18f, 0f, -10f);
+            // A small box of a cabin (8 x 8 m, like REPO's truck / Lethal Company's ship) against the east wall
+            // of its cell (the door stays in that wall); the rest of the cell behind the hull is sealed off.
+            public static readonly Vector3 Min = new(-26f, 0f, -23f);
+            public static readonly Vector3 Max = new(-18f, 0f, -15f);
             public static readonly Vector3 Door = new(-18f, 0f, -19f);
-            public static readonly Vector3 Generator = new(-33f, 0f, -24f);
-            public static readonly Vector3 Panel = new(-27f, 0f, -27.4f);
-            public static readonly Vector3 Launch = new(-34.5f, 0f, -11.5f);
-            public static readonly Vector3 Spawn = new(-27f, 1.05f, -19f);
+            public static readonly Vector3 Generator = new(-24.7f, 0f, -21.4f);
+            public static readonly Vector3 Panel = new(-21.2f, 0f, -22.35f);
+            public static readonly Vector3 Launch = new(-25.2f, 0f, -15.8f);
+            public static readonly Vector3 Spawn = new(-21.5f, 1.05f, -18.4f);
         }
 
         private static readonly Vector3 TransmitterPosition = new(32f, 0f, 24f);
@@ -62,11 +64,11 @@ namespace CoOpHorror.Editor
 
         private static readonly CameraDef[] Cameras =
         {
-            new(1, new Vector3(-17.8f, 0f, -25f), 90f, 35f),     // south warehouse, next to the ship
+            new(1, new Vector3(-7.15f, 0f, -13.5f), -90f, 35f),  // south hall corridor, north arm
             new(2, new Vector3(-35.8f, 0f, 7.5f), 90f, 30f),     // dorm
-            new(3, new Vector3(-1f, 0f, -9.8f), 0f, -35f),       // office A
+            new(3, new Vector3(-7.15f, 0f, 6f), -90f, -35f),     // cross corridor (old office A), north arm
             new(4, new Vector3(17.8f, 0f, -7f), -90f, -35f),     // break room
-            new(5, new Vector3(35.8f, 0f, 7f), -90f, 35f),       // east warehouse
+            new(5, new Vector3(28.85f, 0f, -6f), -90f, 35f),     // corner corridor (old east warehouse)
             new(6, new Vector3(1f, 0f, 27.8f), 180f, -30f),      // server room
             new(7, new Vector3(18.2f, 0f, 13f), 90f, 40f),       // transmitter room
             new(8, new Vector3(35.8f, 0f, -26f), -90f, -35f),    // boiler room
@@ -76,6 +78,7 @@ namespace CoOpHorror.Editor
 
         private static Transform BuildMap(out Light[] emergencyLights)
         {
+            PlanLayout();
             var map = new GameObject(Prefix + "Map").transform;
             var ceilings = new GameObject(Prefix + "Ceilings").transform;
             var emergency = new List<Light>();
@@ -88,8 +91,11 @@ namespace CoOpHorror.Editor
             {
                 var c = room.Center;
                 var size = new Vector3(XCols[room.Col + 1] - XCols[room.Col], 0.5f, ZRows[room.Row + 1] - ZRows[room.Row]);
-                Box(map, "Floor_" + room.Kind, new Vector3(c.x, -0.25f, c.z), size, FloorMaterial(room.Kind));
-                Shape(ceilings, "Ceiling_" + room.Kind, PrimitiveType.Cube, new Vector3(c.x, WallHeight + 0.15f, c.z), Vector3.zero, new Vector3(size.x, 0.3f, size.z), ceiling);
+                if (room.Kind == RoomKind.TransmitterRoom) FloorWithShaft(map, room, size);
+                else Box(map, "Floor_" + room.Kind, new Vector3(c.x, -0.25f, c.z), size, FloorMaterial(room.Kind));
+                // solid (collider kept): nothing - players, monsters, lifted appliances - goes out through the roof.
+                // Ceilings are not under the map root, so they stay out of the NavMesh bake.
+                Box(ceilings, "Ceiling_" + room.Kind, new Vector3(c.x, WallHeight + 0.15f, c.z), new Vector3(size.x, 0.3f, size.z), ceiling);
                 if (room.Kind != RoomKind.Ship)
                 {
                     var red = PointLight(map, "Emergency_" + room.Kind, c + new Vector3(4f, 3.5f, 4f), new Color(1f, 0.1f, 0.06f), 0.6f, 12f);
@@ -110,13 +116,50 @@ namespace CoOpHorror.Editor
             for (var i = 1; i <= 3; i++)
                 for (var r = 0; r < 3; r++) WallWithDoorAlongZ(map, wallInner, XCols[i], ZRows[r], ZRows[r + 1], true);
             for (var j = 1; j <= 2; j++)
-                for (var c = 0; c < 4; c++) WallWithDoorAlongX(map, wallInner, ZRows[j], XCols[c], XCols[c + 1], !(j == 1 && c == 0));
+                for (var c = 0; c < 4; c++)
+                    WallWithDoorAlongX(map, wallInner, ZRows[j], XCols[c], XCols[c + 1],
+                        !(j == 1 && c == 0) && !DoorwayClosed(new Vector3((XCols[c] + XCols[c + 1]) / 2f, 0f, ZRows[j])));
 
             PreparePropTextures();
-            foreach (var room in Rooms) Furnish(map, room);
+            foreach (var room in Rooms)
+            {
+                if (IsCorridor(room.Kind)) { DressCorridor(map, room); continue; }
+                Furnish(map, room);
+                var roomRoot = map.Find("Room_" + room.Kind);
+                if (roomRoot == null || room.Kind == RoomKind.Ship) continue;
+                ChooseRoomPattern(room, roomRoot);
+                BuildBlockers(roomRoot, room);
+            }
             Scatter(map);
+            CullBlocked(map.Find("Clutter"));
             emergencyLights = emergency.ToArray();
             return map;
+        }
+
+        public const float TransmitterPitHalf = 2.5f;
+
+        // The settlement room's floor has a 5 x 5 m hole under the lift (covered by the lift's hatch and ground
+        // slabs until they cave in) above a 25 m shaft: falling in is a death.
+        private static void FloorWithShaft(Transform map, RoomDef room, Vector3 size)
+        {
+            var mat = FloorMaterial(room.Kind);
+            float x0 = XCols[room.Col], x1 = XCols[room.Col + 1], z0 = ZRows[room.Row], z1 = ZRows[room.Row + 1];
+            float hx0 = TransmitterPosition.x - TransmitterPitHalf, hx1 = TransmitterPosition.x + TransmitterPitHalf;
+            float hz0 = TransmitterPosition.z - TransmitterPitHalf, hz1 = TransmitterPosition.z + TransmitterPitHalf;
+            void Piece(string n, float xa, float xb, float za, float zb) =>
+                Box(map, n, new Vector3((xa + xb) / 2f, -0.25f, (za + zb) / 2f), new Vector3(xb - xa, 0.5f, zb - za), mat);
+            Piece("Floor_" + room.Kind + "_S", x0, x1, z0, hz0);
+            Piece("Floor_" + room.Kind + "_N", x0, x1, hz1, z1);
+            Piece("Floor_" + room.Kind + "_W", x0, hx0, hz0, hz1);
+            Piece("Floor_" + room.Kind + "_E", hx1, x1, hz0, hz1);
+            // rough shaft walls and a floor far below
+            var rock = Mat("ShaftRock", new Color(0.28f, 0.26f, 0.24f), tex: Texture("Concrete"), tiling: 3f, tilingY: 12f);
+            const float depth = 26f;
+            Box(map, "ShaftWall", new Vector3(TransmitterPosition.x, -depth / 2f, hz0 - 0.2f), new Vector3(TransmitterPitHalf * 2f + 0.8f, depth, 0.4f), rock);
+            Box(map, "ShaftWall", new Vector3(TransmitterPosition.x, -depth / 2f, hz1 + 0.2f), new Vector3(TransmitterPitHalf * 2f + 0.8f, depth, 0.4f), rock);
+            Box(map, "ShaftWall", new Vector3(hx0 - 0.2f, -depth / 2f, TransmitterPosition.z), new Vector3(0.4f, depth, TransmitterPitHalf * 2f), rock);
+            Box(map, "ShaftWall", new Vector3(hx1 + 0.2f, -depth / 2f, TransmitterPosition.z), new Vector3(0.4f, depth, TransmitterPitHalf * 2f), rock);
+            Box(map, "ShaftBottom", new Vector3(TransmitterPosition.x, -depth - 0.25f, TransmitterPosition.z), new Vector3(TransmitterPitHalf * 2f, 0.5f, TransmitterPitHalf * 2f), rock);
         }
 
         private static Material FloorMaterial(RoomKind kind)
@@ -127,13 +170,17 @@ namespace CoOpHorror.Editor
                 case RoomKind.Server:
                 case RoomKind.TransmitterRoom:
                     return Mat("FloorMetal", new Color(0.5f, 0.52f, 0.55f), tex: Texture("Metal"), tiling: 9f);
+                // Korean interiors: yellow vinyl floor (jangpan) at home, grey carpet tiles in the office,
+                // small beige tiles in the pantry and the green epoxy of an old public building's corridor.
                 case RoomKind.Breakroom:
+                    return Mat("FloorTile", new Color(0.86f, 0.82f, 0.74f), tex: Texture("SmallTile"), tiling: 9f);
                 case RoomKind.CorridorN:
-                    return Mat("FloorTile", new Color(0.75f, 0.75f, 0.72f), tex: Texture("Tile"), tiling: 9f);
+                    return Mat("FloorEpoxy", new Color(0.42f, 0.6f, 0.45f), tex: Texture("Epoxy"), tiling: 6f);
                 case RoomKind.Dorm:
-                case RoomKind.OfficeA:
                 case RoomKind.OfficeB:
-                    return Mat("FloorCarpet", new Color(0.55f, 0.32f, 0.3f), tex: Texture("Carpet"), tiling: 9f);
+                    return Mat("FloorJangpan", new Color(0.95f, 0.82f, 0.55f), tex: Texture("Jangpan"), tiling: 6f);
+                case RoomKind.OfficeA:
+                    return Mat("FloorCarpet", new Color(0.55f, 0.57f, 0.6f), tex: Texture("Carpet"), tiling: 9f);
                 default:
                     return Mat("FloorConcrete", new Color(0.45f, 0.45f, 0.43f), tex: Texture("Concrete"), tiling: 9f);
             }
@@ -205,7 +252,6 @@ namespace CoOpHorror.Editor
                 case RoomKind.Dorm:
                     foreach (var z in new[] { -7.5f, -3.5f, 3.5f, 7.5f }) Bed(root, new Vector3(-34.2f, 0f, z), 90f);
                     for (var i = 0; i < 4; i++) Locker(root, new Vector3(-34.8f + i * 0.7f, 0f, 9.45f), 180f);
-                    for (var i = 0; i < 4; i++) Locker(root, new Vector3(-23f + i * 0.7f, 0f, 9.45f), 180f);
                     Table(root, new Vector3(-24f, 0f, -6f), 0f, 1.6f, 0.9f);
                     break;
                 case RoomKind.OfficeA:
@@ -268,8 +314,8 @@ namespace CoOpHorror.Editor
                     }
                     break;
                 case RoomKind.TransmitterRoom:
-                    Stripe(root, new Vector3(29.5f, 0.01f, 21.5f), new Vector3(7f, 0.02f, 0.3f));
-                    Stripe(root, new Vector3(26f, 0.01f, 25f), new Vector3(0.3f, 0.02f, 7f));
+                    Stripe(root, new Vector3(32f, 0.01f, 20.8f), new Vector3(7f, 0.02f, 0.3f));   // hazard edge around the lift shaft
+                    Stripe(root, new Vector3(28.8f, 0.01f, 24f), new Vector3(0.3f, 0.02f, 6.4f));
                     Crate(root, new Vector3(20f, 0f, 26.5f), 1.2f);
                     Crate(root, new Vector3(34.5f, 0f, 12f), 1.2f);
                     Pipe(root, new Vector3(19f, 3.5f, 27f), new Vector3(35f, 3.5f, 27f), 0.2f);
@@ -282,38 +328,39 @@ namespace CoOpHorror.Editor
             var hull = Mat("ShipHull", new Color(0.42f, 0.45f, 0.5f), tex: Texture("Metal"), tiling: 3f, tilingY: 1f);
             var dark = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
             var screen = Mat("Screen", new Color(0.05f, 0.25f, 0.2f), unlit: true);
-            // Hull cladding and ribs (visual), consoles along the north wall, pipes, crates.
-            Shape(root, "HullWest", PrimitiveType.Cube, new Vector3(-35.7f, 2f, -19f), Vector3.zero, new Vector3(0.1f, 4f, 17.5f), hull);
-            Shape(root, "HullSouth", PrimitiveType.Cube, new Vector3(-27f, 2f, -27.7f), Vector3.zero, new Vector3(17.5f, 4f, 0.1f), hull);
-            Shape(root, "HullNorth", PrimitiveType.Cube, new Vector3(-27f, 2f, -10.3f), Vector3.zero, new Vector3(17.5f, 4f, 0.1f), hull);
-            for (var x = -34f; x <= -20f; x += 3.5f)
+            float w = Ship.Min.x, e = Ship.Max.x, so = Ship.Min.z, n = Ship.Max.z;
+            float cx = (w + e) / 2f, cz = (so + n) / 2f, depth = n - so, width = e - w;
+            // Solid hull walls close the cabin in (west, south, north); the east side is the cell wall with the door.
+            Box(root, "HullWest", new Vector3(w - 0.15f, 2f, cz), new Vector3(0.3f, 4f, depth + 0.6f), hull);
+            Box(root, "HullSouth", new Vector3(cx, 2f, so - 0.15f), new Vector3(width + 0.3f, 4f, 0.3f), hull);
+            Box(root, "HullNorth", new Vector3(cx, 2f, n + 0.15f), new Vector3(width + 0.3f, 4f, 0.3f), hull);
+            Shape(root, "HullRoof", PrimitiveType.Cube, new Vector3(cx, 3.95f, cz), Vector3.zero, new Vector3(width + 0.3f, 0.1f, depth + 0.6f), hull);
+            for (var x = w + 1.5f; x <= e - 1f; x += 3f)
             {
                 if (Mathf.Abs(x - Ship.Panel.x) > 1.2f) // keep the CCTV monitor clear
-                    Shape(root, "RibS", PrimitiveType.Cube, new Vector3(x, 2f, -27.55f), Vector3.zero, new Vector3(0.35f, 4f, 0.3f), dark);
-                Shape(root, "RibN", PrimitiveType.Cube, new Vector3(x, 2f, -10.45f), Vector3.zero, new Vector3(0.35f, 4f, 0.3f), dark);
-                Shape(root, "RibTop", PrimitiveType.Cube, new Vector3(x, 3.85f, -19f), Vector3.zero, new Vector3(0.35f, 0.3f, 17f), dark);
+                    Shape(root, "RibS", PrimitiveType.Cube, new Vector3(x, 2f, so + 0.1f), Vector3.zero, new Vector3(0.3f, 4f, 0.2f), dark);
+                Shape(root, "RibN", PrimitiveType.Cube, new Vector3(x, 2f, n - 0.1f), Vector3.zero, new Vector3(0.3f, 4f, 0.2f), dark);
+                Shape(root, "RibTop", PrimitiveType.Cube, new Vector3(x, 3.75f, cz), Vector3.zero, new Vector3(0.3f, 0.25f, depth), dark);
             }
-            for (var x = -31f; x <= -22f; x += 3f)
+            for (var x = w + 4f; x <= e - 1.9f; x += 3f) // small cabin: one or two consoles along the north wall
             {
-                var console = Group(root, "Console", new Vector3(x, 0f, -11f), 0f);
+                var console = Group(root, "Console", new Vector3(x, 0f, n - 0.5f), 0f);
                 Box(console, "Body", new Vector3(0f, 0.55f, 0f), new Vector3(2.2f, 1.1f, 0.8f), Mat("Console", new Color(0.18f, 0.2f, 0.24f), tex: Texture("Metal"), tiling: 1f));
-                Dressed(console, "KenneySpaceStation/computer-wide", Vector3.zero, new Vector3(2.2f, 1.1f, 0.8f), StationFrontYaw + 180f);
-                Shape(console, "ConsoleScreen", PrimitiveType.Cube, new Vector3(0f, 1.3f, -0.25f), new Vector3(-25f, 0f, 0f), new Vector3(1.8f, 0.5f, 0.05f), screen);
+                if (PropModel(ShipProp("ShipConsole")) != null) Dressed(console, ShipProp("ShipConsole"), Vector3.zero, new Vector3(2.2f, 1.1f, 0.8f), 180f, true);
+                else Shape(console, "ConsoleScreen", PrimitiveType.Cube, new Vector3(0f, 1.3f, -0.25f), new Vector3(-25f, 0f, 0f), new Vector3(1.8f, 0.5f, 0.05f), screen);
             }
-            Pipe(root, new Vector3(-35.5f, 3.4f, -14f), new Vector3(-35.5f, 3.4f, -26f), 0.2f);
-            Pipe(root, new Vector3(-35f, 3.6f, -27f), new Vector3(-20f, 3.6f, -27f), 0.15f);
-            Crate(root, new Vector3(-20.5f, 0f, -26f), 1.1f);
-            Crate(root, new Vector3(-21.6f, 0f, -26.2f), 0.8f);
-            Stripe(root, new Vector3(-18.9f, 0.01f, -19f), new Vector3(0.35f, 0.02f, DoorWidth));
+            Pipe(root, new Vector3(w + 0.3f, 3.4f, n - 1f), new Vector3(w + 0.3f, 3.4f, so + 1f), 0.18f);
+            Pipe(root, new Vector3(w + 0.5f, 3.55f, so + 0.35f), new Vector3(e - 1f, 3.55f, so + 0.35f), 0.13f);
+            Crate(root, new Vector3(e - 0.8f, 0f, n - 0.8f), 0.8f); // one crate in the corner by the door
+            Stripe(root, new Vector3(e - 0.9f, 0.01f, Ship.Door.z), new Vector3(0.35f, 0.02f, DoorWidth));
             // Ship lights run on the shared grid: dark at first (only the generator's little lamp), then brighter
             // in steps at 30 / 50 / 70 / 100 % charge (ShipLighting). Intensities here are the full-power values.
             var shipLights = new[]
             {
-                PointLight(root, "ShipLight", new Vector3(-27f, 3.5f, -22f), new Color(0.75f, 0.88f, 1f), 17f, 16f),
-                PointLight(root, "ShipLight2", new Vector3(-27f, 3.5f, -14f), new Color(0.75f, 0.88f, 1f), 14f, 14f),
-                PointLight(root, "ShipLight3", new Vector3(-32f, 3.5f, -18f), new Color(0.75f, 0.88f, 1f), 11f, 13f),
-                PointLight(root, "ShipLight4", new Vector3(-22f, 3.5f, -24f), new Color(0.75f, 0.88f, 1f), 11f, 13f),
-                PointLight(root, "ShipAlarm", new Vector3(-20f, 3.6f, -12f), new Color(1f, 0.15f, 0.1f), 2f, 7f),
+                PointLight(root, "ShipLight", new Vector3(cx, 3.4f, so + 3f), new Color(0.75f, 0.88f, 1f), 13f, 12f),
+                PointLight(root, "ShipLight2", new Vector3(cx, 3.4f, n - 3f), new Color(0.75f, 0.88f, 1f), 13f, 12f),
+                PointLight(root, "ShipLight3", new Vector3(w + 2.5f, 3.4f, cz), new Color(0.75f, 0.88f, 1f), 9f, 10f),
+                PointLight(root, "ShipAlarm", new Vector3(e - 1.5f, 3.5f, n - 1f), new Color(1f, 0.15f, 0.1f), 2f, 6f),
             };
             root.gameObject.AddComponent<ShipLighting>().Lights = shipLights;
         }
@@ -322,24 +369,26 @@ namespace CoOpHorror.Editor
 
         private static void Desk(Transform parent, Vector3 position, float yaw)
         {
+            // Big enough to crawl under (1 m clear, 1.25 m deep), like the rest of the furniture.
             var root = Group(parent, "Desk", position, yaw);
             var wood = Mat("Wood", new Color(0.5f, 0.36f, 0.22f), tex: Texture("Wood"), tiling: 1f);
-            Box(root, "Top", new Vector3(0f, 0.95f, 0f), new Vector3(1.6f, 0.06f, 0.85f), wood);
-            foreach (var x in new[] { -0.74f, 0.74f })
-                foreach (var z in new[] { -0.36f, 0.36f }) Box(root, "Leg", new Vector3(x, 0.46f, z), new Vector3(0.06f, 0.92f, 0.06f), wood);
+            Box(root, "Top", new Vector3(0f, 1.02f, 0f), new Vector3(2f, 0.06f, 1.25f), wood);
+            foreach (var x in new[] { -0.95f, 0.95f })
+                foreach (var z in new[] { -0.58f, 0.58f }) Box(root, "Leg", new Vector3(x, 0.5f, z), new Vector3(0.06f, 1f, 0.06f), wood);
             Shape(root, "Monitor", PrimitiveType.Cube, new Vector3(0.2f, 1.2f, 0.2f), Vector3.zero, new Vector3(0.45f, 0.35f, 0.08f), Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f)));
-            Dressed(root, "KenneyFurniture/desk", Vector3.zero, new Vector3(1.6f, 0.98f, 0.85f), FrontYaw);
-            Dress(root, "KenneyFurniture/computerScreen", new Vector3(0.2f, 0.98f, 0.2f), new Vector3(0.5f, 0.38f, 0.14f), FrontYaw);
+            Dressed(root, "KenneyFurniture/table", Vector3.zero, new Vector3(2f, 1.05f, 1.25f), FrontYaw); // open underneath
+            Dress(root, "KenneyFurniture/computerScreen", new Vector3(0.3f, 1.05f, 0.35f), new Vector3(0.6f, 0.45f, 0.16f), FrontYaw);
         }
 
         private static void Table(Transform parent, Vector3 position, float yaw, float length, float width)
         {
             var root = Group(parent, "Table", position, yaw);
             var top = Mat("TableTop", new Color(0.62f, 0.6f, 0.55f), tex: Texture("Wood"), tiling: 1f);
-            Box(root, "Top", new Vector3(0f, 0.95f, 0f), new Vector3(length, 0.06f, width), top);
+            width = Mathf.Max(width, 1.25f); // wide enough to hide under
+            Box(root, "Top", new Vector3(0f, 1.02f, 0f), new Vector3(length, 0.06f, width), top);
             foreach (var x in new[] { -length / 2f + 0.06f, length / 2f - 0.06f })
-                foreach (var z in new[] { -width / 2f + 0.06f, width / 2f - 0.06f }) Box(root, "Leg", new Vector3(x, 0.46f, z), new Vector3(0.06f, 0.92f, 0.06f), top);
-            Dressed(root, "KenneyFurniture/table", Vector3.zero, new Vector3(length, 0.98f, width));
+                foreach (var z in new[] { -width / 2f + 0.06f, width / 2f - 0.06f }) Box(root, "Leg", new Vector3(x, 0.5f, z), new Vector3(0.06f, 1f, 0.06f), top);
+            Dressed(root, "KenneyFurniture/table", Vector3.zero, new Vector3(length, 1.05f, width));
         }
 
         private static void Bed(Transform parent, Vector3 position, float yaw)
@@ -347,18 +396,18 @@ namespace CoOpHorror.Editor
             var root = Group(parent, "Bed", position, yaw);
             var frame = Mat("BedFrame", new Color(0.35f, 0.36f, 0.38f), tex: Texture("Metal"), tiling: 1f);
             var sheet = Mat("Mattress", new Color(0.55f, 0.55f, 0.5f), tex: Texture("Concrete"), tiling: 1f);
-            Box(root, "Frame", new Vector3(0f, 0.95f, 0f), new Vector3(1f, 0.08f, 2f), frame);
-            Box(root, "Mattress", new Vector3(0f, 1.07f, 0f), new Vector3(0.92f, 0.16f, 1.9f), sheet);
-            Shape(root, "Pillow", PrimitiveType.Cube, new Vector3(0f, 1.2f, 0.72f), Vector3.zero, new Vector3(0.6f, 0.1f, 0.3f), sheet);
-            foreach (var x in new[] { -0.46f, 0.46f })
-                foreach (var z in new[] { -0.96f, 0.96f }) Box(root, "Leg", new Vector3(x, 0.46f, z), new Vector3(0.06f, 0.92f, 0.06f), frame);
+            Box(root, "Frame", new Vector3(0f, 1f, 0f), new Vector3(1.35f, 0.08f, 2.1f), frame);
+            Box(root, "Mattress", new Vector3(0f, 1.12f, 0f), new Vector3(1.27f, 0.16f, 2f), sheet);
+            Shape(root, "Pillow", PrimitiveType.Cube, new Vector3(0f, 1.25f, 0.78f), Vector3.zero, new Vector3(0.75f, 0.1f, 0.3f), sheet);
+            foreach (var x in new[] { -0.63f, 0.63f })
+                foreach (var z in new[] { -1.01f, 1.01f }) Box(root, "Leg", new Vector3(x, 0.48f, z), new Vector3(0.06f, 0.96f, 0.06f), frame);
         }
 
         private static void Chair(Transform parent, Vector3 position, float yaw)
         {
             var root = Group(parent, "Chair", position, yaw);
             var mat = Mat("ChairMat", new Color(0.25f, 0.25f, 0.27f));
-            Box(root, "Seat", new Vector3(0f, 0.48f, 0f), new Vector3(0.45f, 0.06f, 0.45f), mat);
+            Shape(root, "Seat", PrimitiveType.Cube, new Vector3(0f, 0.48f, 0f), Vector3.zero, new Vector3(0.45f, 0.06f, 0.45f), mat); // no collider
             Shape(root, "Back", PrimitiveType.Cube, new Vector3(0f, 0.75f, -0.2f), Vector3.zero, new Vector3(0.45f, 0.5f, 0.05f), mat);
             foreach (var x in new[] { -0.2f, 0.2f })
                 foreach (var z in new[] { -0.2f, 0.2f }) Shape(root, "Leg", PrimitiveType.Cube, new Vector3(x, 0.23f, z), Vector3.zero, new Vector3(0.04f, 0.46f, 0.04f), mat);
@@ -389,6 +438,9 @@ namespace CoOpHorror.Editor
                 foreach (var z in new[] { -0.45f, 0.45f }) Box(root, "Post", new Vector3(x, 1.5f, z), new Vector3(0.08f, 3f, 0.08f), metal);
             foreach (var y in new[] { 0.15f, 1.1f, 2.05f, 2.95f })
                 Box(root, "Shelf", new Vector3(0f, y, 0f), new Vector3(length, 0.05f, 0.95f), yellow);
+            Box(root, "KickPlate", new Vector3(0f, 0.08f, 0f), new Vector3(length, 0.16f, 0.95f), yellow);
+            for (var bx = -length / 2f + 0.35f; bx < length / 2f - 0.2f; bx += 0.62f) // bottom shelf full of boxes
+                Dress(root, "KenneyFurniture/cardboardBoxClosed", new Vector3(bx, 0.18f, 0f), new Vector3(0.58f, 0.7f, 0.8f), (bx * 37f) % 12f, true);
             var seed = Mathf.Abs(position.GetHashCode());
             for (var i = 0; i < (int)length; i++)
             {
@@ -500,18 +552,18 @@ namespace CoOpHorror.Editor
             Directory.CreateDirectory(TextureDir);
             var path = $"{TextureDir}/{name}.asset";
             var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (texture == null)
-            {
-                texture = new Texture2D(32, 32, TextureFormat.RGBA32, false) { name = name, filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Repeat };
-                var random = new System.Random(name.GetHashCode());
-                var pixels = new Color[32 * 32];
-                for (var y = 0; y < 32; y++)
-                for (var x = 0; x < 32; x++)
-                    pixels[y * 32 + x] = Pixel(name, x, y, (float)random.NextDouble());
-                texture.SetPixels(pixels);
-                texture.Apply();
-                AssetDatabase.CreateAsset(texture, path);
-            }
+            var created = texture == null;
+            if (created) texture = new Texture2D(32, 32, TextureFormat.RGBA32, false) { name = name, filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Repeat };
+            // Always repaint (patterns change between versions).
+            var random = new System.Random(name.GetHashCode());
+            var pixels = new Color[32 * 32];
+            for (var y = 0; y < 32; y++)
+            for (var x = 0; x < 32; x++)
+                pixels[y * 32 + x] = Pixel(name, x, y, (float)random.NextDouble());
+            texture.SetPixels(pixels);
+            texture.Apply();
+            if (created) AssetDatabase.CreateAsset(texture, path);
+            else EditorUtility.SetDirty(texture);
             Textures[name] = texture;
             return texture;
         }
@@ -534,13 +586,30 @@ namespace CoOpHorror.Editor
                     var grain = Mathf.Sin((y + Mathf.Sin(x * 0.4f) * 2f) * 0.9f) * 0.08f;
                     return new Color(0.62f + grain + n * 0.06f, 0.45f + grain + n * 0.05f, 0.28f + grain * 0.5f);
                 case "Wallpaper":
-                    var stripe = x % 8 < 4 ? 0.05f : 0f;
-                    var stain = y < 8 ? (8 - y) * 0.03f : 0f;
-                    return new Color(0.78f + stripe - stain + n * 0.06f, 0.74f + stripe - stain + n * 0.06f, 0.62f - stain + n * 0.05f);
+                    // Korean apartment wallpaper: cream with a faint woven texture and tiny scattered flowers,
+                    // stained near the floor.
+                    var weave = ((x + y) % 4 == 0 ? -0.025f : 0f) + ((x - y) % 6 == 0 ? 0.015f : 0f);
+                    var flower = ((x % 16 == 4 && y % 16 == 4) || (x % 16 == 12 && y % 16 == 12)) ? -0.09f : 0f;
+                    var stain = y < 8 ? (8 - y) * 0.025f : 0f;
+                    return new Color(0.88f + weave + flower * 0.6f - stain + n * 0.04f, 0.84f + weave + flower - stain + n * 0.04f, 0.74f + weave + flower * 0.4f - stain + n * 0.03f);
+                case "Jangpan":
+                    // oiled-paper vinyl floor: warm ochre, a woven grain and the seam between sheets
+                    var grainJ = Mathf.Sin((x * 0.9f + Mathf.Sin(y * 0.5f) * 1.5f)) * 0.035f;
+                    var sheetSeam = y % 16 == 0 ? -0.12f : 0f;
+                    return new Color(0.82f + grainJ + sheetSeam + n * 0.05f, 0.64f + grainJ + sheetSeam + n * 0.04f, 0.36f + grainJ * 0.5f + sheetSeam + n * 0.03f);
+                case "SmallTile":
+                    var groutS = x % 4 == 0 || y % 4 == 0;
+                    return groutS ? Gray(0.55f + n * 0.05f) : new Color(0.9f + n * 0.06f, 0.86f + n * 0.06f, 0.76f + n * 0.05f);
+                case "Epoxy":
+                    var scuff = noise > 0.9f ? -0.15f : 0f;
+                    var line = y == 1 ? 0.25f : 0f; // a painted walking line
+                    return new Color(0.4f + n * 0.05f + scuff + line, 0.62f + n * 0.05f + scuff + line * 0.7f, 0.45f + n * 0.04f + scuff);
                 case "Rust":
                     return new Color(0.55f + n * 0.25f, 0.32f + n * 0.15f, 0.18f + n * 0.08f);
                 case "Carpet":
-                    return Gray(0.55f + n * 0.3f);
+                    // office carpet tiles, alternating pile direction
+                    var tileC = ((x / 16) + (y / 16)) % 2 == 0 ? 0.04f : -0.04f;
+                    return Gray(0.55f + tileC + n * 0.22f);
                 case "Hazard":
                     var band = ((x + y) / 6) % 2 == 0;
                     return band ? new Color(0.95f, 0.75f, 0.1f) : new Color(0.08f, 0.08f, 0.08f);

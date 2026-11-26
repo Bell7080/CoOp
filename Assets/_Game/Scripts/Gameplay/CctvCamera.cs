@@ -24,10 +24,12 @@ namespace CoOpHorror.Gameplay
         public float DefaultYaw;
         public float DefaultPitch = 25f;
         public Transform Head;
+        public GameObject Mount;   // the camera model fixed on the wall bracket (gone with the head when ripped off)
         public Transform Lens;
         public Renderer Led;
         public Light Spot;    // the camera's own lamp; lit only while the CCTV view renders through it
         public Light Fill;    // soft night-vision fill around the camera, also only for the CCTV render
+        public Vector3 RoomMin, RoomMax; // floor area of the room it watches (CCTV minimap)
 
         public readonly NetworkVariable<float> Yaw = new(0f);
         public readonly NetworkVariable<float> Pitch = new(0f);
@@ -119,6 +121,7 @@ namespace CoOpHorror.Gameplay
             if (Head != null)
             {
                 Head.gameObject.SetActive(!IsSpawned || !Detached.Value);
+                if (Mount != null) Mount.SetActive(!IsSpawned || !Detached.Value);
                 var target = Quaternion.Euler(IsSpawned ? CurrentPitch : DefaultPitch, IsSpawned ? CurrentYaw : DefaultYaw, 0f);
                 Head.localRotation = localAim ? target : Quaternion.Slerp(Head.localRotation, target, 1f - Mathf.Exp(-10f * Time.deltaTime));
             }

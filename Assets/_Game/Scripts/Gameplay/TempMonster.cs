@@ -30,6 +30,14 @@ namespace CoOpHorror.Gameplay
         public float EyeHeight = 1.2f;
         public float AttackRange = 1.6f;
         public int AttackDamage = 20;
+        // Lunge / charge: when it sees its target this close it rushes in a burst (fan: face-first jump scare,
+        // TV: head-first ram), then needs a breather. Hits send the player flying.
+        public float LungeRange = 5f;
+        public float LungeSpeed = 7f;
+        public float LungeSeconds = 0.8f;
+        public float LungeCooldown = 3f;
+        public float Knockback = 9f;
+        public float KnockUp = 4f;
 
         public static readonly List<TempMonster> All = new();
         public static TempMonster Instance => All.Count > 0 ? All[0] : null;
@@ -60,6 +68,8 @@ namespace CoOpHorror.Gameplay
         private float nextRepath;
         private Vector3 lastGoal = new(float.MaxValue, 0f, 0f);
         private bool targetHidden;
+        private float lungeUntil, nextLunge;
+        public bool Lunging => Time.time < lungeUntil;
         private MaterialPropertyBlock block;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
@@ -159,7 +169,14 @@ namespace CoOpHorror.Gameplay
 
             if (target != null)
             {
-                agent.speed = ChaseSpeed;
+                var gap = (target.transform.position - transform.position).magnitude;
+                if (!Lunging && Time.time >= nextLunge && Time.time - lastSeenTime < 0.3f && gap < LungeRange)
+                {
+                    lungeUntil = Time.time + LungeSeconds;
+                    nextLunge = lungeUntil + LungeCooldown;
+                    LungeFxRpc();
+                }
+                agent.speed = Lunging ? LungeSpeed : ChaseSpeed;
                 MoveTo(Time.time - lastSeenTime < 0.3f ? target.transform.position : lastSeenPosition);
             }
             else if (investigating)
@@ -253,13 +270,35 @@ namespace CoOpHorror.Gameplay
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
                 var offset = p.transform.position - transform.position;
                 if (Flat(offset).magnitude > AttackRange || Mathf.Abs(offset.y) > 1.6f) continue;
-                var push = Flat(offset).normalized * 6f + Vector3.up * 3f;
+                var push = Flat(offset).normalized * Knockback + Vector3.up * KnockUp;
                 p.ServerApplyDamage(AttackDamage, push);
+                lungeUntil = 0f;
+                HitFxRpc(p.OwnerClientId);
                 // Whatever the victim was carrying takes the hit too.
                 if (p.TryGetComponent<PlayerInteractor>(out var victim) && victim.HeldGrabbable is Appliance carried) carried.ServerDamage(0.15f);
                 nextAttack = Time.time + AttackCooldown;
                 return;
             }
+        }
+
+        // Every peer: start of a lunge (animation burst + sound).
+        [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
+        private void LungeFxRpc()
+        {
+            ProtoAudio.Play(ProtoSound.Buzz, transform.position, 0.8f);
+            ProtoAudio.Play(ProtoSound.Rumble, transform.position, 0.9f); // ku-gu-gu-gu charge
+            var rig = GetComponentInChildren<RigAnimator>();
+            if (rig != null) rig.PlayOnce(rig.AttackState, 0.8f);
+        }
+
+        // Every peer: the hit; the victim gets the jump-scare (shake, flash, bang).
+        [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
+        private void HitFxRpc(ulong victim)
+        {
+            ProtoAudio.Play(ProtoSound.Bang, transform.position, 1f);
+            var rig = GetComponentInChildren<RigAnimator>();
+            if (rig != null) rig.PlayOnce(rig.AttackState, 0.6f);
+            if (NetworkManager != null && victim == NetworkManager.LocalClientId) CrashIntro.Scare(0.35f, 0.6f);
         }
 
         private void UpdateEyes()

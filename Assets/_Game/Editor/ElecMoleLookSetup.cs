@@ -28,6 +28,7 @@ namespace CoOpHorror.Editor
                 pipeline.renderScale = RenderScale;
                 pipeline.upscalingFilter = UpscalingFilterSelection.Point;
                 pipeline.msaaSampleCount = 1;
+                pipeline.supportsCameraDepthTexture = true;
                 var so = new SerializedObject(pipeline);
                 var shadows = so.FindProperty("m_AdditionalLightShadowsSupported");
                 if (shadows != null) shadows.boolValue = true;
@@ -49,6 +50,12 @@ namespace CoOpHorror.Editor
             material.SetFloat("_Levels", 22f);
             material.SetFloat("_Dither", 0.6f);
             material.SetFloat("_Vignette", 1.1f);
+            material.SetFloat("_Lift", 0.75f);
+            material.SetFloat("_Outline", 0.55f);
+            material.SetFloat("_OutlineThreshold", 0.12f);
+            material.SetFloat("_OutlineFade", 22f);
+            material.SetFloat("_Aberration", 0.004f);
+            material.SetFloat("_Grain", 0.06f);
             EditorUtility.SetDirty(material);
 
             FullScreenPassRendererFeature feature = null;
@@ -71,11 +78,26 @@ namespace CoOpHorror.Editor
             feature.passMaterial = material;
             feature.injectionPoint = FullScreenPassRendererFeature.InjectionPoint.BeforeRenderingTransparents;
             feature.fetchColorBuffer = true;
+            feature.requirements = ScriptableRenderPassInput.Depth; // depth-edge outlines
             feature.SetActive(true);
             EditorUtility.SetDirty(feature);
             EditorUtility.SetDirty(renderer);
             AssetDatabase.SaveAssets();
             AddCctvRenderer(pipeline);
+            PixelFonts();
+        }
+
+        // Fusion Pixel must render as hard pixels (no anti-aliasing) to stay crisp at 12 px multiples.
+        private static void PixelFonts()
+        {
+            foreach (var guid in AssetDatabase.FindAssets("t:Font", new[] { "Assets/_Game/Resources/Fonts/FusionPixel" }))
+            {
+                var importer = AssetImporter.GetAtPath(AssetDatabase.GUIDToAssetPath(guid)) as TrueTypeFontImporter;
+                if (importer == null || importer.fontRenderingMode == FontRenderingMode.HintedRaster) continue;
+                importer.fontRenderingMode = FontRenderingMode.HintedRaster;
+                importer.fontTextureCase = FontTextureCase.Dynamic;
+                importer.SaveAndReimport();
+            }
         }
 
         // Second renderer for the CCTV feed camera: a copy of the PC renderer with the PS1 pass switched off.

@@ -7,8 +7,8 @@ using UnityEngine;
 namespace CoOpHorror.Gameplay
 {
     // The discharged body a dead player leaves behind (spawned by the host from the player prefab's
-    // CorpsePrefab). Click it repeatedly: the hit damage becomes current and at PlayerHealth.ReviveThreshold
-    // the player comes back here. Keep the button down to carry it with telekinesis — into the ship, where
+    // CorpsePrefab). A teammate holds E on it to pour in their own energy (PlayerReviver: costs 30 health)
+    // and the player comes back here at 1 health. Keep the button down to carry it with telekinesis — into the ship, where
     // the ship's surge right before launch revives it. The dead player meanwhile spectates as a ghost.
     public sealed class Corpse : Grabbable
     {
@@ -25,7 +25,6 @@ namespace CoOpHorror.Gameplay
         public readonly NetworkVariable<ulong> PlayerObjectId = new(NoPlayer);
         public readonly NetworkVariable<ulong> PlayerClientId = new(0);
 
-        private readonly Dictionary<ulong, float> nextHit = new();
         private MaterialPropertyBlock block;
         private float flashUntil;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
@@ -61,25 +60,24 @@ namespace CoOpHorror.Gameplay
             prompt = string.Empty;
             var player = Player;
             if (player == null || !player.IsDead.Value || HeldBy(who)) return InteractKind.None;
+            var mine = who.GetComponent<PlayerHealth>();
+            var canRevive = mine != null && mine.Health.Value > PlayerReviver.Cost;
+            var revive = canRevive
+                ? GameText.Format("interact.reviveHold", PlayerClientId.Value, PlayerReviver.Cost, player.RevivePercent)
+                : GameText.Format("interact.reviveWeak", PlayerReviver.Cost);
             if (who.HandsFull)
             {
-                prompt = GameText.Format("interact.reviveOnly", PlayerClientId.Value, player.RevivePercent);
-                return InteractKind.Press;
+                prompt = revive;
+                return InteractKind.None;
             }
-            prompt = GameText.Format("interact.corpse", PlayerClientId.Value, player.RevivePercent);
-            return InteractKind.PressOrHold;
+            prompt = revive + " · " + GameText.Get("interact.corpseCarry");
+            return InteractKind.Hold;
         }
 
-        // A hit: current into the body.
-        public override void ServerUse(PlayerInteractor who)
+        // Spark when a revive completes (PlayerReviver).
+        public void ServerReviveFx()
         {
-            var player = Player;
-            if (player == null || !player.IsDead.Value) return;
-            var now = Time.time;
-            if (nextHit.TryGetValue(who.NetworkObjectId, out var next) && now < next) return;
-            nextHit[who.NetworkObjectId] = now + HitCooldown;
-            player.ServerAddReviveCharge(Random.Range(MinHit, MaxHit + 1));
-            HitFxRpc();
+            if (IsSpawned) HitFxRpc();
         }
 
         public override bool ServerHold(PlayerInteractor who, float dt) => Player != null && ServerGrabTick(who);
@@ -94,8 +92,9 @@ namespace CoOpHorror.Gameplay
         private void Update()
         {
             if (!IsSpawned) return;
-            var color = Color.HSVToRGB((PlayerClientId.Value * 0.19f + 0.42f) % 1f, 0.25f, 0.25f);
-            if (Time.time < flashUntil || Random.value < 0.01f) color = new Color(0.55f, 0.9f, 1f);
+            // Soaked in blood; a spark of current now and then (and when someone pours energy in).
+            var color = new Color(0.5f, 0.05f, 0.04f);
+            if (Time.time < flashUntil || Random.value < 0.008f) color = new Color(0.55f, 0.9f, 1f);
             Tint(BodyRenderer, color);
             Tint(HeadRenderer, color);
         }

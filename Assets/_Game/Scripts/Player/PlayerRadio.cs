@@ -76,7 +76,8 @@ namespace CoOpHorror.Player
             if (IsOwner)
             {
                 var k = Keyboard.current;
-                var talk = AutomationTalk ?? (FirstPersonController.GameplayInputReady && k != null && k.eKey.isPressed);
+                // Push-to-talk is V (E is for plugs and reviving).
+                var talk = AutomationTalk ?? (FirstPersonController.GameplayInputReady && k != null && k.vKey.isPressed);
                 var desired = !talk || Dead ? RadioMode.Off : interactor != null && interactor.Target is ShipMic ? RadioMode.ShipMic : RadioMode.Walkie;
                 if (desired != sent)
                 {

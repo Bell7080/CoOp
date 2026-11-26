@@ -26,20 +26,44 @@ namespace CoOpHorror.Gameplay
         public static readonly List<CordPlug> All = new();
 
         public Appliance Appliance;
-        public LineRenderer Cord;
+        public LineRenderer Cord;      // fallback flat line when there is no tube mesh
+        public MeshFilter CordMesh;    // the cord as a round rubber tube (vertices in this object's local space)
         public Transform Visual;
+
+        public const int TubeSides = 6;
+        public const float TubeRadius = 0.011f;
 
         public readonly NetworkVariable<PlugState> State = new(PlugState.Stowed);
         public readonly NetworkVariable<ulong> Holder = new(NoHolder);
         public readonly NetworkVariable<int> Socket = new(-1);
+        // What the socket belongs to: NoHolder = the transmitter, otherwise a power strip's NetworkObjectId.
+        public readonly NetworkVariable<ulong> SocketHost = new(NoHolder);
         public readonly NetworkVariable<Vector3> DropPosition = new();   // where a reel-in started
         public readonly NetworkVariable<double> RetractStart = new(0d);
 
         private readonly Vector3[] points = new Vector3[CordPoints];
+        private Mesh tube;
+        private Vector3[] tubeVerts;
+        private Vector3[] tubeNormals;
         private Renderer[] renderers;
         private static readonly RaycastHit[] Ground = new RaycastHit[6];
 
         public bool IsSocketed => IsSpawned && State.Value == PlugState.Socketed;
+        public bool InTransmitter => IsSocketed && SocketHost.Value == NoHolder;
+
+        // The power strip this plug is in (null when it is in the transmitter or not plugged in).
+        public Appliance HostTap
+        {
+            get
+            {
+                if (!IsSocketed || SocketHost.Value == NoHolder || NetworkManager == null || NetworkManager.SpawnManager == null) return null;
+                return NetworkManager.SpawnManager.SpawnedObjects.TryGetValue(SocketHost.Value, out var obj) ? obj.GetComponent<Appliance>() : null;
+            }
+        }
+
+        // A plugged-in cord can be pulled back out of a power strip any time, and out of the transmitter until
+        // the settlement has started.
+        public bool CanUnplug => IsSocketed && (!InTransmitter || (Transmitter.Instance != null && Transmitter.Instance.IsActive));
         public bool HeldBy(PlayerInteractor who) => who != null && IsSpawned && State.Value == PlugState.Held && Holder.Value == who.NetworkObjectId;
         public string DisplayName => Appliance != null ? Appliance.DisplayName : string.Empty;
         public float Length => Appliance != null ? Appliance.CordLength : 5f;
@@ -51,12 +75,21 @@ namespace CoOpHorror.Gameplay
         {
             base.Awake();
             All.Add(this);
-            renderers = GetComponentsInChildren<Renderer>(true);
             if (Cord != null)
             {
                 Cord.positionCount = CordPoints;
                 Cord.useWorldSpace = true;
             }
+            if (CordMesh != null)
+            {
+                if (Cord != null) Cord.enabled = false;
+                BuildTube();
+            }
+            // only what is drawn in the scene: primitives hidden under the plug model (and the flat line, when the
+            // tube is used) stay off
+            var shown = new List<Renderer>();
+            foreach (var r in GetComponentsInChildren<Renderer>(true)) if (r.enabled) shown.Add(r);
+            renderers = shown.ToArray();
         }
 
         public override void OnDestroy()
@@ -71,6 +104,7 @@ namespace CoOpHorror.Gameplay
             State.Value = PlugState.Stowed;
             Holder.Value = NoHolder;
             Socket.Value = -1;
+            SocketHost.Value = NoHolder;
         }
 
         private bool ApplianceGone => Appliance == null || !Appliance.IsSpawned || Appliance.IsGone;
@@ -83,7 +117,7 @@ namespace CoOpHorror.Gameplay
             {
                 case PlugState.Socketed:
                     prompt = GameText.Format("interact.plugSocketed", DisplayName);
-                    return InteractKind.None;
+                    return CanUnplug && !who.HandsFull ? InteractKind.Press : InteractKind.None;
                 case PlugState.Held:
                     prompt = GameText.Format("interact.plugHeldByOther", DisplayName);
                     return InteractKind.None;
@@ -96,7 +130,10 @@ namespace CoOpHorror.Gameplay
         public override void ServerUse(PlayerInteractor who)
         {
             if (ApplianceGone || who.HandsFull) return;
-            if (State.Value != PlugState.Stowed && State.Value != PlugState.Retracting) return;
+            if (State.Value == PlugState.Socketed && !CanUnplug) return;
+            if (State.Value == PlugState.Held) return;
+            Socket.Value = -1;
+            SocketHost.Value = NoHolder;
             Holder.Value = who.NetworkObjectId;
             State.Value = PlugState.Held;
         }
@@ -110,6 +147,8 @@ namespace CoOpHorror.Gameplay
         // Let go: the cord reels back in from here.
         private void ServerDropAt(Vector3 point)
         {
+            Socket.Value = -1;
+            SocketHost.Value = NoHolder;
             DropPosition.Value = point;
             RetractStart.Value = NetworkManager.ServerTime.Time;
             Holder.Value = NoHolder;
@@ -121,7 +160,18 @@ namespace CoOpHorror.Gameplay
         public void ServerSocket(int socket)
         {
             if (!IsServer) return;
+            SocketHost.Value = NoHolder;
             Socket.Value = socket;
+            Holder.Value = NoHolder;
+            State.Value = PlugState.Socketed;
+        }
+
+        // Into outlet `outlet` of a power strip.
+        public void ServerSocketInto(Appliance tap, int outlet)
+        {
+            if (!IsServer || tap == null) return;
+            SocketHost.Value = tap.NetworkObjectId;
+            Socket.Value = outlet;
             Holder.Value = NoHolder;
             State.Value = PlugState.Socketed;
         }
@@ -147,6 +197,9 @@ namespace CoOpHorror.Gameplay
                     var home = StowedPose();
                     var p = Vector3.Lerp(DropPosition.Value, home.position, eased) + Vector3.up * (Mathf.Sin(t * Mathf.PI) * 0.25f);
                     return new Pose(p, Quaternion.Slerp(Quaternion.LookRotation(home.position - DropPosition.Value + Vector3.forward * 0.001f), home.rotation, eased));
+                case PlugState.Socketed when SocketHost.Value != NoHolder:
+                    var tap = HostTap;
+                    return tap != null ? tap.OutletPose(Socket.Value) : StowedPose();
                 case PlugState.Socketed when Transmitter.Instance != null:
                     return Transmitter.Instance.SocketPose(Socket.Value);
                 default:
@@ -166,6 +219,8 @@ namespace CoOpHorror.Gameplay
             if (!IsServer || !IsSpawned || ApplianceGone) return;
             var state = State.Value;
             if (state == PlugState.Stowed) return;
+            // while the settlement reels everything in, sockets hold (no tension, no popping out)
+            if (state == PlugState.Socketed && Transmitter.Instance != null && Transmitter.Instance.Phase.Value >= TransmitterPhase.Settling) return;
             if (state == PlugState.Retracting)
             {
                 if (RetractProgress >= 1f) State.Value = PlugState.Stowed;
@@ -192,7 +247,7 @@ namespace CoOpHorror.Gameplay
 
         private void LateUpdate()
         {
-            var hidden = ApplianceGone || (Appliance != null && Appliance.IsPlugged && Transmitter.Instance != null && Transmitter.Instance.PullProgress >= 1f);
+            var hidden = ApplianceGone || (Appliance != null && Appliance.InSettlement && Transmitter.Instance != null && Transmitter.Instance.PullProgress >= 1f);
             foreach (var r in renderers) if (r != null) r.enabled = !hidden;
             if (hidden) return;
 
@@ -204,7 +259,7 @@ namespace CoOpHorror.Gameplay
         // Floppy cord: sags with the slack, sways a little and rests on the floor.
         private void DrawCord(Vector3 a, Vector3 b, bool reeling)
         {
-            if (Cord == null) return;
+            if (Cord == null && tube == null) return;
             var distance = Vector3.Distance(a, b);
             // Reeling in, the cord is pulled straight like a tape measure.
             var slack = reeling ? 0f : Mathf.Max(0f, Length - distance);
@@ -227,7 +282,56 @@ namespace CoOpHorror.Gameplay
                 if (floor > float.MinValue && p.y < floor + 0.025f) p.y = floor + 0.025f;
                 points[i] = p;
             }
-            Cord.SetPositions(points);
+            if (tube != null) UpdateTube();
+            else Cord.SetPositions(points);
+        }
+
+        // A closed ring of TubeSides vertices around every cord point (triangles fixed, vertices per frame).
+        private void BuildTube()
+        {
+            tube = new Mesh { name = "CordTube" };
+            tube.MarkDynamic();
+            tubeVerts = new Vector3[CordPoints * TubeSides];
+            tubeNormals = new Vector3[tubeVerts.Length];
+            var tris = new int[(CordPoints - 1) * TubeSides * 6];
+            var k = 0;
+            for (var i = 0; i < CordPoints - 1; i++)
+            for (var j = 0; j < TubeSides; j++)
+            {
+                int a = i * TubeSides + j, b = i * TubeSides + (j + 1) % TubeSides, c = a + TubeSides, d = b + TubeSides;
+                tris[k++] = a; tris[k++] = c; tris[k++] = b;
+                tris[k++] = b; tris[k++] = c; tris[k++] = d;
+            }
+            tube.vertices = tubeVerts;
+            tube.triangles = tris;
+            CordMesh.sharedMesh = tube;
+        }
+
+        private void UpdateTube()
+        {
+            var t = CordMesh.transform;
+            var side = Vector3.right;
+            for (var i = 0; i < CordPoints; i++)
+            {
+                var along = (points[Mathf.Min(i + 1, CordPoints - 1)] - points[Mathf.Max(i - 1, 0)]);
+                if (along.sqrMagnitude < 1e-8f) along = Vector3.forward;
+                along.Normalize();
+                // parallel-transport the side vector so the tube does not twist
+                side = Vector3.Cross(along, Vector3.Cross(side, along));
+                if (side.sqrMagnitude < 1e-6f) side = Vector3.Cross(along, Mathf.Abs(along.y) < 0.9f ? Vector3.up : Vector3.right);
+                side.Normalize();
+                var up = Vector3.Cross(along, side);
+                for (var j = 0; j < TubeSides; j++)
+                {
+                    var angle = j * Mathf.PI * 2f / TubeSides;
+                    var n = side * Mathf.Cos(angle) + up * Mathf.Sin(angle);
+                    tubeVerts[i * TubeSides + j] = t.InverseTransformPoint(points[i] + n * TubeRadius);
+                    tubeNormals[i * TubeSides + j] = t.InverseTransformDirection(n);
+                }
+            }
+            tube.vertices = tubeVerts;
+            tube.normals = tubeNormals;
+            tube.RecalculateBounds();
         }
     }
 }

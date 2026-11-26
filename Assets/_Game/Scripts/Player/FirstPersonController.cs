@@ -37,6 +37,17 @@ namespace CoOpHorror.Player
 
         // Owner-local stamina 0..1 (presentation and movement only; not replicated).
         public float Stamina { get; private set; } = 1f;
+        public bool Boosted => Time.time < boostUntil;   // adrenaline: running costs no stamina
+        private float boostUntil;
+
+        // Server -> owner: an adrenaline shot from the supply station.
+        [Rpc(SendTo.Owner)]
+        public void BoostRpc(float seconds)
+        {
+            boostUntil = Time.time + seconds;
+            Stamina = 1f;
+            Exhausted = false;
+        }
         public bool Exhausted { get; private set; }
 
         // Owner-written so remote players see roughly where the attacker is looking.
@@ -68,6 +79,9 @@ namespace CoOpHorror.Player
         private Vector3 impulse;
         private float pitch;
         private Camera attachedCamera;
+        private float bobPhase, bobAmount;
+        private Vector3 bobApplied;
+        private float bobRollApplied;
 
         // Automation hook for CLI/Play Mode verification (clone editors drop synthetic keyboard input
         // while unfocused). Owner only; real input is unaffected.
@@ -117,6 +131,28 @@ namespace CoOpHorror.Player
             DetachCamera();
             if (Local == this) { Local = null; SetCaptured(false); }
             base.OnDestroy();
+        }
+
+        // Head bob, owner only: a gentle bounce while walking, a little more while running (never enough to
+        // make anyone queasy). Additive on the camera so it combines with shakes; eases out when you stop.
+        private void LateUpdate()
+        {
+            if (!IsSpawned || !IsOwner || attachedCamera == null || attachedCamera.transform.parent != AimPivot) return;
+            var cam = attachedCamera.transform;
+            cam.localPosition -= bobApplied;
+            cam.localRotation *= Quaternion.Euler(0f, 0f, -bobRollApplied);
+            var v = controller.velocity;
+            var flat = new Vector2(v.x, v.z).magnitude;
+            var grounded = controller.isGrounded;
+            var target = !grounded || flat < 0.3f || ViewLocked ? 0f : flat > WalkSpeed + 0.5f ? 1f : Crouched.Value ? 0.25f : 0.45f;
+            bobAmount = Mathf.MoveTowards(bobAmount, target, Time.deltaTime * 3f);
+            bobPhase += Time.deltaTime * Mathf.Lerp(1.6f, 2.4f, Mathf.Clamp01(flat / RunSpeed)) * Mathf.PI * 2f * (bobAmount > 0.001f ? 1f : 0f);
+            var up = Mathf.Abs(Mathf.Sin(bobPhase)) - 0.5f;               // two dips per step cycle
+            var side = Mathf.Sin(bobPhase * 0.5f);
+            bobApplied = new Vector3(side * 0.012f, up * 0.03f, 0f) * bobAmount;
+            bobRollApplied = side * 0.35f * Mathf.Max(0f, bobAmount - 0.5f) * 2f; // roll only when running
+            cam.localPosition += bobApplied;
+            cam.localRotation *= Quaternion.Euler(0f, 0f, bobRollApplied);
         }
 
         private void Update()
@@ -179,7 +215,7 @@ namespace CoOpHorror.Player
             var running = run && !Exhausted && input != Vector2.zero;
             if (running)
             {
-                Stamina = Mathf.Max(0f, Stamina - StaminaDrain * dt);
+                if (!Boosted) Stamina = Mathf.Max(0f, Stamina - StaminaDrain * dt);
                 staminaRestAt = Time.time + StaminaRegenDelay;
                 if (Stamina <= 0f) Exhausted = true;
             }

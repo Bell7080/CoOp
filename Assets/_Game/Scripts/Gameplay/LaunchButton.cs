@@ -8,14 +8,19 @@ namespace CoOpHorror.Gameplay
     public sealed class LaunchButton : Interactable
     {
         public Renderer Lamp;
+        public Transform Cap;              // the red mushroom button of the model: sinks in when pressed
+        public float PressDepth = 0.07f;   // metres
 
         private MaterialPropertyBlock block;
+        private Vector3 capHome;
+        private float press;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
         protected override void Awake()
         {
             base.Awake();
             block = new MaterialPropertyBlock();
+            if (Cap != null) capHome = Cap.localPosition;
         }
 
         public override InteractKind Describe(PlayerInteractor who, out string prompt)
@@ -47,9 +52,16 @@ namespace CoOpHorror.Gameplay
 
         private void Update()
         {
-            if (Lamp == null) return;
             var stage = StageDirector.Instance;
             var phase = stage != null && stage.IsSpawned ? stage.Phase.Value : StagePhase.Exploring;
+            // pushed in once the launch is armed (everyone sees it go down), and it stays in
+            if (Cap != null)
+            {
+                var down = phase == StagePhase.Launching || phase == StagePhase.Escaped;
+                press = Mathf.MoveTowards(press, down ? 1f : 0f, Time.deltaTime * (down ? 12f : 3f));
+                Cap.localPosition = capHome + Cap.parent.InverseTransformVector(Vector3.down * (PressDepth * press));
+            }
+            if (Lamp == null) return;
             var color = phase switch
             {
                 StagePhase.Blackout => Mathf.PingPong(Time.time * 2f, 1f) > 0.5f ? new Color(0.3f, 1f, 0.4f) : new Color(0.05f, 0.25f, 0.08f),

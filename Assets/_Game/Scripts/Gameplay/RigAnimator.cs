@@ -28,7 +28,12 @@ namespace CoOpHorror.Gameplay
         public string AttackState = "";
         public float MoveSpeed = 0.25f;     // m/s above which the move clip plays
         public float FastSpeed = 4.5f;      // m/s above which the fast clip plays
-        public float ClipSpeedPerMetre = 0.45f; // move clip playback speed per m/s
+        public float ClipSpeedPerMetre = 0.45f; // move clip playback speed per m/s (1 / stride length per cycle)
+        public float FastClipSpeedPerMetre = -1f; // the fast clip's own stride; -1 = same as the move clip
+        // Steps: a thump per footfall (contacts per clip cycle), e.g. the TV's hops. 0 = silent.
+        public int StepsPerCycle;
+        public float StepVolume = 0.35f;
+        private float stepPhase;
         public float Fade = 0.15f;
         public FloppyChain[] Floppy;
 
@@ -37,6 +42,18 @@ namespace CoOpHorror.Gameplay
         private Vector3 last;
         private float speed;
         private string current;
+        private string forced;
+        private float forcedUntil;
+
+        // Plays a state for a moment over the movement-driven choice (attack bursts).
+        public void PlayOnce(string state, float seconds)
+        {
+            if (string.IsNullOrEmpty(state) || Animator == null) return;
+            forced = state;
+            forcedUntil = Time.time + seconds;
+            current = state;
+            Animator.CrossFadeInFixedTime(state, 0.05f, 0, 0f);
+        }
 
         private Vector3[][] tipPositions;
         private Vector3[][] tipVelocities;
@@ -69,6 +86,7 @@ namespace CoOpHorror.Gameplay
             var crouched = player != null && player.IsSpawned && player.Crouched.Value;
             var chasing = monster != null && monster.IsSpawned && monster.Chasing.Value;
             string next;
+            if (Time.time < forcedUntil) { Animator.speed = 1f; return; }
             if (crouched && !string.IsNullOrEmpty(CrouchState)) next = CrouchState;
             else if (chasing && speed < MoveSpeed && !string.IsNullOrEmpty(AttackState)) next = AttackState;
             else if (speed < MoveSpeed) next = IdleState;
@@ -81,7 +99,16 @@ namespace CoOpHorror.Gameplay
                 Animator.CrossFadeInFixedTime(next, Fade);
             }
             var moving = next == MoveState || next == FastState;
-            Animator.speed = moving ? Mathf.Clamp(speed * ClipSpeedPerMetre, 0.6f, 2.2f) : crouched ? Mathf.Clamp(0.5f + speed * 0.6f, 0.5f, 2f) : 1f;
+            // Playback follows the ground speed so hands and feet don't skate.
+            var perMetre = next == FastState && FastClipSpeedPerMetre > 0f ? FastClipSpeedPerMetre : ClipSpeedPerMetre;
+            Animator.speed = moving ? Mathf.Clamp(speed * perMetre, 0.4f, 2.6f) : crouched ? Mathf.Clamp(0.5f + speed * 0.6f, 0.5f, 2f) : 1f;
+            if (StepsPerCycle > 0 && moving)
+            {
+                var state = Animator.GetCurrentAnimatorStateInfo(0);
+                var cycles = state.normalizedTime * StepsPerCycle;
+                if (Mathf.Floor(cycles) != Mathf.Floor(stepPhase)) ProtoAudio.PlayPitched(ProtoSound.Clunk, MotionRoot.position, StepVolume, next == FastState ? 1.15f : 0.85f);
+                stepPhase = cycles;
+            }
         }
 
         // Spring lag: each bone's tip trails its animated position and the bone turns to follow it.

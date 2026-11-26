@@ -28,6 +28,7 @@ namespace CoOpHorror.Gameplay
 
         public readonly NetworkVariable<StagePhase> Phase = new(StagePhase.Exploring);
         public readonly NetworkVariable<double> LaunchAt = new(0d);
+        public readonly NetworkVariable<double> IntroStart = new(0d);   // crash-landing opening (CrashIntro)
         public readonly NetworkVariable<int> Earned = new(0);          // settlement value of this stage
         public NetworkList<ulong> Aboard; // OwnerClientIds inside the ship when it left
 
@@ -63,6 +64,7 @@ namespace CoOpHorror.Gameplay
         {
             if (!IsServer) return;
             Phase.Value = StagePhase.Exploring;
+            IntroStart.Value = NetworkManager.ServerTime.Time + 0.5d;
             LaunchAt.Value = 0d;
             Earned.Value = 0;
             Aboard.Clear();

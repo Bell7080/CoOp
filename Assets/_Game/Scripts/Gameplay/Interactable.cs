@@ -18,11 +18,19 @@ namespace CoOpHorror.Gameplay
 
         protected virtual void Awake() => colliders = GetComponentsInChildren<Collider>(true);
 
+        // Whether looking at this collider targets the interactable (e.g. a door only through its buttons).
+        // Other colliders of the object then just block the view like a wall.
+        public virtual bool TargetedBy(Collider c) => true;
+
         // Server clock shared by every peer (clients use their estimate of the host's clock).
         protected double NetTime => NetworkManager != null ? NetworkManager.ServerTime.Time : 0d;
 
         // Client: what the left button does for this player right now and the prompt to show.
         public abstract InteractKind Describe(PlayerInteractor who, out string prompt);
+
+        // Client: a short description shown under the crosshair while looking at this (what it is, what it is
+        // worth). Empty for things that need no explanation.
+        public virtual string HoverInfo(PlayerInteractor who) => string.Empty;
 
         // Owner: handle a press locally (e.g. open a view). Return true to skip the server request.
         public virtual bool OwnerUse(PlayerInteractor who) => false;

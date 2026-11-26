@@ -13,13 +13,25 @@ namespace CoOpHorror.Editor
     {
         private const string ThirdPartyDir = "Assets/_Game/ThirdParty";
         private const string PropMaterialDir = MaterialDir + "/Props";
+        private const string ShipPropDir = "Assets/_Game/Art/Props";
+
+        // Tripo-made ship equipment (paid credits; tools/blender/glb_to_prop.py), used through Dress().
+        private static string ShipProp(string name) => $"{ShipPropDir}/{name}/{name}";
+
+        // Hides the named primitives' renderers but keeps their colliders and transforms (logic still uses them).
+        private static void HideRenderers(Transform root, params string[] names)
+        {
+            foreach (var r in root.GetComponentsInChildren<MeshRenderer>(true))
+                if (System.Array.IndexOf(names, r.name) >= 0 && !IsModel(r.transform)) r.enabled = false;
+        }
 
         private static readonly Dictionary<string, Material> PropMaterials = new();
         private static readonly Color PropTint = new(0.78f, 0.76f, 0.72f);
 
         private static GameObject PropModel(string path)
         {
-            var model = AssetDatabase.LoadAssetAtPath<GameObject>($"{ThirdPartyDir}/{path}.fbx");
+            var full = path.StartsWith("Assets/") ? path + ".fbx" : $"{ThirdPartyDir}/{path}.fbx";
+            var model = AssetDatabase.LoadAssetAtPath<GameObject>(full);
             if (model == null) Debug.LogWarning($"[ElecMole] Missing prop model {path}");
             return model;
         }
@@ -27,11 +39,11 @@ namespace CoOpHorror.Editor
         // Low-res, point-filtered imports for every third-party texture.
         private static void PreparePropTextures()
         {
-            foreach (var guid in AssetDatabase.FindAssets("t:Texture2D", new[] { ThirdPartyDir }))
+            foreach (var guid in AssetDatabase.FindAssets("t:Texture2D", new[] { ThirdPartyDir, ShipPropDir }))
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
                 if (AssetImporter.GetAtPath(path) is not TextureImporter importer) continue;
-                var maxSize = path.Contains("Quaternius") ? 128 : 64;
+                var maxSize = path.Contains("Quaternius") || path.Contains("/Art/Props/") ? 128 : 64;
                 if (importer.filterMode == FilterMode.Point && importer.maxTextureSize == maxSize && !importer.mipmapEnabled) continue;
                 importer.filterMode = FilterMode.Point;
                 importer.maxTextureSize = maxSize;
@@ -114,7 +126,8 @@ namespace CoOpHorror.Editor
             var texture = source.HasProperty("_BaseMap") ? source.GetTexture("_BaseMap") : source.mainTexture;
             var gray = color.r * 0.3f + color.g * 0.59f + color.b * 0.11f;
             // Kenney's furniture colours are bright pastel; push them further into the grime.
-            var furniture = pack == "KenneyFurniture";
+            // The factory / station packs and the sci-fi barrels are just as toy-bright.
+            var furniture = pack.StartsWith("Kenney") || pack == "QuaterniusSciFi";
             color = Color.Lerp(color, new Color(gray, gray, gray), furniture ? 0.5f : 0.35f) * PropTint * (furniture ? 0.62f : 1f);
             color.a = 1f;
             material.SetColor("_BaseColor", color);
@@ -122,6 +135,10 @@ namespace CoOpHorror.Editor
             material.SetTextureScale("_BaseMap", Vector2.one);
             material.SetFloat("_Smoothness", 0.05f);
             material.SetFloat("_Metallic", 0f);
+            // Tripo models (Art/Props) have open faces here and there (the TV's screen): draw both sides so
+            // they never look see-through.
+            material.SetFloat("_Cull", pack == "Assets" ? 0f : 2f);
+            material.doubleSidedGI = pack == "Assets";
             EditorUtility.SetDirty(material);
             PropMaterials[key] = material;
             return material;
@@ -180,54 +197,51 @@ namespace CoOpHorror.Editor
         private const float FrontYaw = 0f;
         private const float StationFrontYaw = 0f;
 
-        // Loose junk along the walls, away from doorways (wall midpoints). Small or flat things have no collider.
+        // Set dressing, placed on purpose so it reads as part of the room (a bin corner, a cone line in front of
+        // a hazard zone, tyres stacked in a corner), never strewn about. Small or flat things have no collider.
         private static void Scatter(Transform map)
         {
             var root = new GameObject("Clutter").transform;
             root.SetParent(map, false);
-            // south hall
-            Clutter(root, "QuaterniusZombie/Blood_1", new Vector3(-6f, 0.01f, -19f), 20f, 0.02f, false);
-            Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(-1.2f, 0f, -21f), 0f, 0.6f, false);
-            Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(-1.6f, 0f, -17.5f), 40f, 0.6f, false);
-            Clutter(root, "QuaterniusZombie/TrashBag_1", new Vector3(-17f, 0f, -22f), 0f, 0.55f, false);
-            // storage
-            Clutter(root, "QuaterniusZombie/Wheels_Stack", new Vector3(16.5f, 0f, -12f), 0f, 0.6f);
-            Clutter(root, "QuaterniusZombie/TrashBag_2", new Vector3(1f, 0f, -20f), 90f, 0.5f, false);
-            Clutter(root, "QuaterniusZombie/CinderBlock", new Vector3(8f, 0f, -20f), 10f, 0.22f, false);
-            Clutter(root, "QuaterniusZombie/CinderBlock", new Vector3(8.6f, 0f, -19.5f), 75f, 0.22f, false);
-            // boiler room
+            // break room (Korean office pantry): the kimchi fridge next to the big fridge
+            Clutter(root, ShipProp("KrKimchiFridge"), new Vector3(3.2f, 0f, 9.1f), 180f, 0.9f);
+            // break room: the bin corner by the door
+            Clutter(root, "QuaterniusHouse/Trashcan_Large", new Vector3(16.8f, 0f, -8.6f), 0f, 1.05f);
+            Clutter(root, "QuaterniusZombie/TrashBag_1", new Vector3(15.9f, 0f, -9.2f), 30f, 0.65f, false);
+            Clutter(root, "QuaterniusZombie/TrashBag_2", new Vector3(16.9f, 0f, -7.6f), 80f, 0.6f, false);
+            Clutter(root, "KenneyFurniture/radio", new Vector3(5.3f, 1.05f, -4f), 160f, 0.24f, false);
+            Clutter(root, "KenneyFurniture/televisionVintage", new Vector3(16.6f, 0.95f, 9.2f), 180f, 0.5f, false);
+            // south hall: a coned-off hazard strip
+            for (var k = 0; k < 4; k++)
+                Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(-12f + k * 1.6f, 0f, -20.4f), k * 25f, 0.95f, false);
+            // storage: tyres in the corner, cinder blocks stacked against the wall
+            Clutter(root, "QuaterniusZombie/Wheels_Stack", new Vector3(16.5f, 0f, -12f), 0f, 0.9f);
+            for (var k = 0; k < 3; k++)
+                Clutter(root, "QuaterniusZombie/CinderBlock", new Vector3(8.4f, k * 0.23f, -27.5f), k % 2 * 90f, 0.22f, false);
+            // boiler room: spare pipes against the wall, the stain where something happened
+            Clutter(root, "QuaterniusZombie/Pipes", new Vector3(20.6f, 0f, -12.5f), 90f, 0.7f);
             Clutter(root, "QuaterniusZombie/Blood_2", new Vector3(25f, 0.01f, -18f), 0f, 0.02f, false);
-            Clutter(root, "QuaterniusZombie/Pipes", new Vector3(20.6f, 0f, -12.5f), 90f, 0.65f);
-            Clutter(root, "QuaterniusZombie/CinderBlock", new Vector3(24f, 0f, -11f), 30f, 0.22f, false);
-            // dorm
-            Clutter(root, "QuaterniusHouse/NightStand_1", new Vector3(-35.2f, 0f, -5.5f), 90f, 0.6f);
-            Clutter(root, "QuaterniusHouse/NightStand_1", new Vector3(-35.2f, 0f, 5.5f), 90f, 0.6f);
-            Clutter(root, "QuaterniusZombie/TrashBag_1", new Vector3(-20f, 0f, -8f), 0f, 0.55f, false);
-            // office A
-            Clutter(root, "KenneyFurniture/trashcan", new Vector3(-12.6f, 0f, -5f), 0f, 0.45f, false);
-            Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-1f, 0f, 8.5f), 0f, 1f);
-            Clutter(root, "KenneyFurniture/coatRackStanding", new Vector3(-17f, 0f, -8.5f), 0f, 1.8f);
-            // break room
-            Clutter(root, "QuaterniusHouse/Trashcan_Large", new Vector3(16.8f, 0f, -8.6f), 0f, 1f);
-            Clutter(root, "KenneyFurniture/radio", new Vector3(5.3f, 0.98f, -4f), 160f, 0.22f, false);
-            Clutter(root, "KenneyFurniture/televisionVintage", new Vector3(16.6f, 0.95f, 9.2f), 180f, 0.45f, false);
-            // east warehouse
-            Clutter(root, "KenneyFactory/warning-traffic", new Vector3(19.5f, 0f, -8.5f), 0f, 1.2f);
-            Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(26f, 0f, -2f), 0f, 0.6f, false);
-            Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(28f, 0f, 2.5f), 0f, 0.6f, false);
-            // office B
-            Clutter(root, "KenneyFurniture/bookcaseClosedWide", new Vector3(-27f, 0f, 27.3f), 180f, 2f);
-            Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-35f, 0f, 11f), 0f, 1f);
-            // north corridor
-            Clutter(root, "QuaterniusZombie/TrashBag_2", new Vector3(-1f, 0f, 27f), 0f, 0.5f, false);
-            Clutter(root, "QuaterniusZombie/Blood_1", new Vector3(-8f, 0.01f, 20f), 120f, 0.02f, false);
-            Clutter(root, "KenneyFurniture/cardboardBoxOpen", new Vector3(-16.5f, 0f, 25.5f), 20f, 0.45f, false);
-            // server room
+            // dorm: night stands between the beds
+            Clutter(root, "QuaterniusHouse/NightStand_1", new Vector3(-35.2f, 0f, -5.5f), 90f, 0.65f);
+            Clutter(root, "QuaterniusHouse/NightStand_1", new Vector3(-35.2f, 0f, 5.5f), 90f, 0.65f);
+            // offices: plants and a coat rack by the door, bins under the desks' ends
+            Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-1f, 0f, 8.5f), 0f, 1.1f);
+            Clutter(root, "KenneyFurniture/coatRackStanding", new Vector3(-17f, 0f, -8.5f), 0f, 1.9f);
+            Clutter(root, "KenneyFurniture/trashcan", new Vector3(-12.6f, 0f, -5.9f), 0f, 0.5f, false);
+            Clutter(root, "KenneyFurniture/bookcaseClosedWide", new Vector3(-27f, 0f, 27.3f), 180f, 2.1f);
+            Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-35f, 0f, 11f), 0f, 1.1f);
+            // east warehouse: a traffic post at the loading lane
+            Clutter(root, "KenneyFactory/warning-traffic", new Vector3(19.5f, 0f, -8.5f), 0f, 1.3f);
+            // north corridor: bags waiting for collection at the end of the lockers
+            Clutter(root, "QuaterniusZombie/TrashBag_2", new Vector3(-9.6f, 0f, 27.2f), 0f, 0.6f, false);
+            Clutter(root, "QuaterniusZombie/TrashBag_1", new Vector3(-10.4f, 0f, 26.8f), 50f, 0.6f, false);
+            // server room: cable runs between the rack rows
             Clutter(root, "QuaterniusSciFi/Prop_Cable_1", new Vector3(9f, 0f, 19f), 0f, 0.12f, false);
             Clutter(root, "QuaterniusSciFi/Prop_Cable_1", new Vector3(5f, 0f, 19.5f), 180f, 0.12f, false);
             // transmitter room
-            Clutter(root, "QuaterniusZombie/Pipes", new Vector3(35f, 0f, 15f), 0f, 0.65f);
-            Clutter(root, "QuaterniusZombie/Wheels_Stack", new Vector3(19.5f, 0f, 11.5f), 0f, 0.6f);
+            Clutter(root, "QuaterniusZombie/Pipes", new Vector3(35f, 0f, 15f), 0f, 0.7f);
+            // then fill what is still bare along the walls of every room and corridor
+            DressEmptyRooms(root);
         }
     }
 }
