@@ -11,7 +11,7 @@ namespace CoOpHorror.Editor
     // dithering and vignette (CoOp/PS1Screen). Re-runnable; called by the prototype scene builder.
     public static class ElecMoleLookSetup
     {
-        public const float RenderScale = 0.42f;
+        public const float RenderScale = 0.65f;
         private const string PipelinePath = "Assets/Settings/PC_RPAsset.asset";
         private const string RendererPath = "Assets/Settings/PC_Renderer.asset";
         private const string MaterialPath = "Assets/_Game/Materials/Prototype/PS1Screen.mat";
@@ -76,7 +76,8 @@ namespace CoOpHorror.Editor
                 so.ApplyModifiedPropertiesWithoutUndo();
             }
             feature.passMaterial = material;
-            feature.injectionPoint = FullScreenPassRendererFeature.InjectionPoint.BeforeRenderingTransparents;
+            // Apply to the entire world, including transparent particles, before the final colour/bloom pass.
+            feature.injectionPoint = FullScreenPassRendererFeature.InjectionPoint.BeforeRenderingPostProcessing;
             feature.fetchColorBuffer = true;
             feature.requirements = ScriptableRenderPassInput.Depth; // depth-edge outlines
             feature.SetActive(true);

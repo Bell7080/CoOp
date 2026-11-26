@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CoOpHorror.Gameplay;
 using CoOpHorror.Networking;
 using Unity.Netcode;
 using Unity.Netcode.Components;
@@ -27,10 +28,18 @@ namespace CoOpHorror.Player
         public const float CrouchSpeed = 1.8f;
         public const float StandHeight = 1.5f;      // CharacterController; the root sits 1 m above the feet
         public const float StandCenterY = -0.25f;
-        public const float CrouchHeight = 0.8f;
-        public const float CrouchCenterY = -0.6f;
+        public const float CrouchHeight = 0.54f;
+        public const float CrouchCenterY = -0.73f; // keep the feet at root Y - 1
         public const float StandEyeY = 0.25f;
-        public const float CrouchEyeY = -0.32f;
+        public const float CrouchEyeY = -0.57f;
+        public const float CoyoteTime = 0.12f;
+        public const float JumpBufferTime = 0.14f;
+        public const float CrouchRadius = 0.24f;
+        private float lastGroundedAt = float.NegativeInfinity;
+        private float jumpPressedAt = float.NegativeInfinity;
+        private bool jumpConsumed;
+        private float standingRadius;
+        private readonly Collider[] clearanceHits = new Collider[32];
         public const float TuckedCheck = 1.3f;      // something solid this close above a crouched player hides them
 
         public Transform AimPivot;
@@ -93,6 +102,9 @@ namespace CoOpHorror.Player
         private void Awake()
         {
             controller = GetComponent<CharacterController>();
+            standingRadius = controller.radius;
+            controller.skinWidth = Mathf.Max(controller.skinWidth, 0.026f);
+            if (GetComponent<PlayerFoley>() == null) gameObject.AddComponent<PlayerFoley>();
             health = GetComponent<PlayerHealth>();
             interactor = GetComponent<PlayerInteractor>();
             signal = GetComponent<ConnectionAvatar>();
@@ -110,6 +122,7 @@ namespace CoOpHorror.Player
             controller.enabled = true;
             Physics.SyncTransforms();
             Local = this;
+            HorrorAudio.Ensure();
             AttachCamera();
             SetCaptured(true);
         }
@@ -173,7 +186,7 @@ namespace CoOpHorror.Player
             var dt = Mathf.Clamp(Time.deltaTime, 0f, 0.05f);
 
             // Dead: an invisible ghost spectating the living.
-            if (!alive) { UpdateSpectator(dt); return; }
+            if (!alive) { ResetJumpGrace(); UpdateSpectator(dt); return; }
             if (spectating) StopSpectating();
 
             // Locking the cursor produces one large delta; ignore the first frames after capture.
@@ -211,6 +224,8 @@ namespace CoOpHorror.Player
             if (!crouch && Crouched.Value && !CanStandUp()) crouch = true;
             if (Crouched.Value != crouch) Crouched.Value = crouch;
             if (crouch) { run = false; jump = false; }
+            ApplyStance(); // resize before this frame's movement, not one frame later
+            if (ViewLocked) { input = Vector2.zero; run = false; jump = false; ResetJumpGrace(); }
 
             var running = run && !Exhausted && input != Vector2.zero;
             if (running)
@@ -228,11 +243,35 @@ namespace CoOpHorror.Player
             var move = (transform.right * input.x + transform.forward * input.y);
             move = Vector3.ClampMagnitude(move, 1f) * (crouch ? CrouchSpeed : running ? RunSpeed : WalkSpeed);
             var grounded = controller.isGrounded;
+            if (grounded && verticalVelocity <= 0f)
+            {
+                lastGroundedAt = Time.time;
+                jumpConsumed = false;
+            }
+            if (jump) jumpPressedAt = Time.time;
+            if (crouch || ViewLocked || typing || (interactor != null && interactor.HoldingUse))
+                jumpPressedAt = float.NegativeInfinity;
             if (grounded && verticalVelocity < 0f) verticalVelocity = -2f;
-            if (grounded && jump) verticalVelocity = Mathf.Sqrt(2f * JumpHeight * -Gravity);
+            if (!jumpConsumed && Time.time - lastGroundedAt <= CoyoteTime && Time.time - jumpPressedAt <= JumpBufferTime)
+            {
+                verticalVelocity = Mathf.Sqrt(2f * JumpHeight * -Gravity);
+                jumpConsumed = true;
+                jumpPressedAt = lastGroundedAt = float.NegativeInfinity;
+            }
+            controller.stepOffset = grounded && verticalVelocity <= 0f ? (crouch ? 0.12f : 0.3f) : 0f;
             verticalVelocity += Gravity * dt;
             impulse = Vector3.MoveTowards(impulse, Vector3.zero, (grounded ? 14f : 4f) * dt);
-            if (controller.enabled) controller.Move((move + impulse + Vector3.up * verticalVelocity) * dt);
+            if (controller.enabled)
+            {
+                var collisions = controller.Move((move + impulse + Vector3.up * verticalVelocity) * dt);
+                if ((collisions & CollisionFlags.Above) != 0 && verticalVelocity > 0f) verticalVelocity = 0f;
+            }
+        }
+
+        private void ResetJumpGrace()
+        {
+            lastGroundedAt = jumpPressedAt = float.NegativeInfinity;
+            jumpConsumed = true;
         }
 
         // ---------- crouch ----------
@@ -242,6 +281,8 @@ namespace CoOpHorror.Player
         {
             var crouched = Crouched.Value;
             var height = crouched ? CrouchHeight : StandHeight;
+            controller.radius = crouched ? CrouchRadius : standingRadius;
+            controller.stepOffset = crouched ? 0.12f : 0.3f;
             if (!Mathf.Approximately(controller.height, height))
             {
                 controller.height = height;
@@ -256,9 +297,16 @@ namespace CoOpHorror.Player
 
         private bool CanStandUp()
         {
-            var radius = controller.radius * 0.9f;
-            var top = transform.position + Vector3.up * (CrouchCenterY + CrouchHeight / 2f - radius);
-            return !Physics.SphereCast(top, radius, Vector3.up, out _, StandHeight - CrouchHeight + 0.05f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            // Test the entire expanded capsule, including its sides. Ignore our own collider and
+            // leave skin-width room at the feet so a floor never traps us crouched.
+            var radius = standingRadius - controller.skinWidth;
+            var bottom = transform.TransformPoint(Vector3.up * (StandCenterY - StandHeight / 2f + standingRadius));
+            var top = transform.TransformPoint(Vector3.up * (StandCenterY + StandHeight / 2f - standingRadius));
+            var count = Physics.OverlapCapsuleNonAlloc(bottom, top, radius, clearanceHits, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            if (count == clearanceHits.Length) return false;
+            for (var i = 0; i < count; i++)
+                if (!clearanceHits[i].transform.IsChildOf(transform)) return false;
+            return true;
         }
 
         // Host: crouched under furniture (something solid just overhead) — hidden from monsters at range.
@@ -359,6 +407,7 @@ namespace CoOpHorror.Player
             if (sync != null && sync.CanCommitToTransform) sync.Teleport(position, rotation, transform.localScale);
             controller.enabled = true;
             verticalVelocity = 0f;
+            ResetJumpGrace();
             impulse = Vector3.zero;
         }
 

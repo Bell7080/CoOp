@@ -117,7 +117,9 @@ namespace CoOpHorror.Gameplay
         public void ServerReleaseAll()
         {
             if (!IsServer || !IsSpawned) return;
-            foreach (var p in ResolveHolders()) p.ServerForceEndHold(this);
+            // Ending a hold triggers OnHoldersChanged, which reuses ResolveHolders' list.
+            // Iterate a snapshot so destroying a carried item can release every holder safely.
+            foreach (var p in ResolveHolders().ToArray()) p.ServerForceEndHold(this);
             Holders.Clear();
         }
 

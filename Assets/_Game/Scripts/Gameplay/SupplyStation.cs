@@ -189,7 +189,7 @@ namespace CoOpHorror.Gameplay
             {
                 Phase.Value = SupplyPhase.Open;
                 PhaseStart.Value = NetTime;
-                ProtoAudio.Play(ProtoSound.Clunk, transform.position + Vector3.up, 1f);
+                ProtoAudio.Play(ProtoSound.Delivery, transform.position + Vector3.up, 0.8f);
             }
 
             open = Mathf.MoveTowards(open, phase == SupplyPhase.Open ? 1f : 0f, Time.deltaTime * 1.4f);

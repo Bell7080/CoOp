@@ -72,25 +72,11 @@ Shader "CoOp/CctvFisheye"
 
             fixed4 frag(v2f i) : SV_Target
             {
-                // 1) CRT tube: bulge the screen and cut it out with rounded corners.
-                float2 c = i.uv * 2.0 - 1.0;
-                c += c * (c.yx * c.yx) * _Curve;
-                float2 q = abs(c);
-                float2 corner = max(q - (1.0 - _Corner), 0.0) / _Corner;
-                float screen = 1.0 - smoothstep(0.96, 1.0, length(corner));
-                float2 cuv = c * 0.5 + 0.5;
-
-                // 2) Lens: equidistant fisheye from a wide rectilinear render.
-                float2 p = (cuv - 0.5) * 2.0;
-                p.y /= _Aspect;
-                float rho = length(p);
-                float theta = rho * radians(_HalfAngle) / max(_Zoom, 0.01);
-                float2 dir = rho > 1e-5 ? p / rho : float2(0, 0);
-                float r = tan(min(theta, 1.5)) / _SrcHalfTan;
-                float2 s = dir * r;
-                s.y *= _SrcAspect;
-                float2 suv = s * 0.5 + 0.5;
-                float lens = step(theta, 1.5) * step(0.0, suv.x) * step(suv.x, 1.0) * step(0.0, suv.y) * step(suv.y, 1.0);
+                // Full-bleed physical monitor; the player's camera owns lens distortion.
+                float2 cuv = i.uv;
+                float screen = 1.0;
+                float2 suv = (i.uv - 0.5) / max(_Zoom, 0.01) + 0.5;
+                float lens = 1.0;
 
                 // Night-vision style: gain, then a gamma lift so dark rooms read instead of going black.
                 float3 col = pow(saturate(tex2D(_MainTex, saturate(suv)).rgb * _Gain), _Lift) * lens;
@@ -102,12 +88,12 @@ Shader "CoOp/CctvFisheye"
                 float t = _Time.y;
                 // Grain scales with brightness so dark rooms stay readable instead of fizzing.
                 float grain = hash(floor(cuv * float2(480, 270)) + frac(t * 7.13));
-                col *= 0.96 + 0.04 * sin(cuv.y * _Lines * 3.14159);
-                col *= 1.0 + (grain - 0.5) * _Grain;
+                col *= 0.993 + 0.007 * sin(cuv.y * _Lines * 3.14159);
+                col *= 1.0 + (grain - 0.5) * min(_Grain, 0.018);
                 col += (grain - 0.5) * 0.004;
                 col *= 0.97 + 0.03 * smoothstep(0.0, 0.1, abs(frac(cuv.y * 0.5 - t * 0.1) - 0.5));
                 float2 edge = cuv - 0.5;
-                col *= saturate(1.15 - dot(edge, edge) * 1.6);
+                col *= 0.98; // use the model bezel instead of an inset dark rim
 
                 float noise = hash(floor(cuv * float2(240, 135)) + floor(t * 30.0));
                 float stat = saturate(max(1.0 - _Signal, _Static));

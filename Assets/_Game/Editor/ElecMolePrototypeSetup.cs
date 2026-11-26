@@ -230,7 +230,7 @@ namespace CoOpHorror.Editor
             RenderSettings.ambientLight = new Color(0.16f, 0.163f, 0.18f); // with the PS1 shadow lift: rooms read dimly without a lamp
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
-            RenderSettings.fogDensity = 0.075f; // darkness closes in: ~60% at 10 m, ~10% at 20 m
+            RenderSettings.fogDensity = 0.028f; // darkness closes in: ~60% at 10 m, ~10% at 20 m
             RenderSettings.fogColor = Color.black; // the PS1 lift would turn any fog tint into grey haze
             var cam = GameObject.Find("DevelopmentCamera");
             if (cam != null)
@@ -375,13 +375,15 @@ namespace CoOpHorror.Editor
                 return frame;
             }
             var inside = Button("ButtonInside", -0.3f, DoorWidth / 2f + 0.35f);
-            var outside = Button("ButtonOutside", 0.3f, -(DoorWidth / 2f + 0.35f));
+            var outside = Button("ButtonOutside", 0.34f, -(DoorWidth / 2f + 0.12f));
             var door = root.AddComponent<PoweredDoor>();
             door.Capacity = capacity;
             door.Panel = panel.transform;
             door.Indicator = inside.transform.Find("Lamp").GetComponent<Renderer>();
             door.OutsideIndicator = outside.transform.Find("Lamp").GetComponent<Renderer>();
             door.Buttons = new[] { inside.GetComponent<Collider>(), outside.GetComponent<Collider>() };
+            DressDoorButton(inside.transform);
+            DressDoorButton(outside.transform);
             return door;
         }
 
@@ -428,6 +430,7 @@ namespace CoOpHorror.Editor
                 tiles[i] = Shape(root.transform, "Tile" + (i + 1), PrimitiveType.Quad, new Vector3(-1.17f + col * 0.78f, 2.86f - row * 0.62f, -0.485f), new Vector3(0f, 180f, 0f), new Vector3(0.72f, 0.52f, 1f), tileMat).GetComponent<Renderer>();
             }
             root.AddComponent<CctvWall>().Tiles = tiles;
+            FitPreviewBoard(root.transform);
             PointLight(root.transform, "ScreenGlow", new Vector3(0f, 1.5f, 0.5f), new Color(0.55f, 1f, 0.7f), 0.5f, 3.5f);
             root.AddComponent<CctvPanel>().Screen = screen.GetComponent<Renderer>();
         }
@@ -441,7 +444,8 @@ namespace CoOpHorror.Editor
             if (model == null) return;
             HideRenderers(root, "Desk", "MonitorFrame", "Keyboard");
             var desk = root.Find("Desk");
-            if (desk != null) desk.localScale = new Vector3(1.6f, 0.9f, 1.05f); // collider follows the deeper desk
+            if (desk != null) desk.localScale = new Vector3(1.6f, 0.9f, 1.05f);
+            FitFurnitureCollision(root);
             var bounds = Bounds(model.gameObject);
             var probes = new List<MeshCollider>();
             foreach (var f in model.GetComponentsInChildren<MeshFilter>()) { var mc = f.gameObject.AddComponent<MeshCollider>(); mc.sharedMesh = f.sharedMesh; probes.Add(mc); }
@@ -1069,5 +1073,107 @@ namespace CoOpHorror.Editor
             Materials[name] = material;
             return material;
         }
+        // Reusable by the scene builder and by a targeted editor refresh; never rewrites unrelated prefabs.
+        public static void RefreshShipPresentation()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode) throw new InvalidOperationException("Stop Play Mode first.");
+            var panel = Object.FindFirstObjectByType<CctvPanel>();
+            if (panel != null) FitPreviewBoard(panel.transform);
+            var door = Object.FindFirstObjectByType<PoweredDoor>();
+            if (door != null && door.Buttons != null && door.Buttons.Length > 1)
+            {
+                var button = door.Buttons[1].transform;
+                button.localPosition = new Vector3(0.34f, 1.3f, -(DoorWidth / 2f + 0.12f));
+                DressDoorButton(button);
+                EditorUtility.SetDirty(button);
+            }
+            var map = GameObject.Find(Prefix + "Map");
+            if (map != null) BuildShipBreach(map.transform);
+            Physics.SyncTransforms();
+            EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+            EditorSceneManager.SaveScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+            AssetDatabase.SaveAssets();
+        }
+
+        private static void FitPreviewBoard(Transform root)
+        {
+            var board = root.Find("StatusBoard");
+            if (board != null)
+            {
+                board.localPosition = new Vector3(0f, 2.19f, -0.52f);
+                board.localScale = new Vector3(3.04f, 1.15f, 0.04f);
+            }
+            for (var i = 0; i < CctvWall.Columns * CctvWall.Rows; i++)
+            {
+                var tile = root.Find("Tile" + (i + 1));
+                if (tile == null) continue;
+                tile.localPosition = new Vector3(-1.1325f + (i % 4) * 0.755f, 2.4725f - (i / 4) * 0.565f, -0.495f);
+                tile.localScale = new Vector3(0.745f, 0.555f, 1f);
+            }
+        }
+
+        private static void BuildShipBreach(Transform map)
+        {
+            var previous = map.Find("ShipImpactBreach");
+            if (previous != null) Object.DestroyImmediate(previous.gameObject);
+            // Break back the last 1.6 m of the corridor side walls, exposing the actual collision seam.
+            // Keep their far ends fixed. Renaming makes repeated targeted refreshes idempotent.
+            foreach (var wall in map.GetComponentsInChildren<BoxCollider>())
+            {
+                if (wall.name != "CorridorWall") continue;
+                var b = wall.bounds;
+                if (Mathf.Abs(b.min.x - (Ship.Door.x - 0.15f)) > 0.2f || b.size.x < 3f
+                    || Mathf.Abs(Mathf.Abs(b.center.z - Ship.Door.z) - 2f) > 0.2f) continue;
+                wall.transform.position += Vector3.right * 0.8f;
+                wall.transform.localScale -= Vector3.right * 1.6f;
+                wall.name = "ImpactTrimmedCorridorWall";
+            }
+            var root = Group(map, "ShipImpactBreach", Ship.Door, 0f);
+            var concrete = Mat("WallConcrete", new Color(0.5f, 0.5f, 0.5f), tex: Texture("Concrete"), tiling: 8f, tilingY: 1.5f);
+            var hull = Mat("ShipHull", new Color(0.42f, 0.45f, 0.5f), tex: Texture("Metal"), tiling: 3f, tilingY: 1f);
+            var charred = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
+            // The cabin nose has punched through the building plane. Folded plates bridge the seam;
+            // masonry is thrown into the hallway along the direction of impact (+X).
+            for (var side = -1; side <= 1; side += 2)
+            {
+                for (var i = 0; i < 5; i++)
+                {
+                    var z = side * (2.05f + i * 0.12f);
+                    Shape(root, "TornHull", PrimitiveType.Cube, new Vector3(0.15f + i * 0.08f, 0.55f + i * 0.63f, z),
+                        new Vector3(side * (12f + i * 7f), 10f + i * 3f, side * 14f), new Vector3(1.15f, 0.66f, 0.09f), hull);
+                    Shape(root, "FracturedWall", PrimitiveType.Cube, new Vector3(0.55f, 0.4f + i * 0.7f, side * (2.3f + (i % 2) * 0.2f)),
+                        new Vector3(i * 13f, side * 18f, 9f + i * 6f), new Vector3(0.65f, 0.86f, 0.72f), concrete);
+                    Shape(root, "ExposedRebar", PrimitiveType.Cube, new Vector3(0.9f, 0.7f + i * 0.58f, side * (2.15f + i * 0.08f)),
+                        new Vector3(side * 21f, 37f + i * 9f, 65f), new Vector3(0.045f, 1.2f, 0.045f), charred);
+                }
+                for (var i = 0; i < 12; i++)
+                {
+                    var forward = 0.25f + (i % 4) * 0.57f;
+                    var z = side * (1.75f + (i / 4) * 0.48f);
+                    Shape(root, "EjectedMasonry", PrimitiveType.Cube, new Vector3(forward, 0.07f + (i % 3) * 0.035f, z),
+                        new Vector3(9f + i * 17f, i * 47f, i * 23f), new Vector3(0.25f + (i % 3) * 0.12f, 0.15f, 0.24f + (i % 2) * 0.18f), concrete);
+                }
+                Shape(root, "ImpactSkid", PrimitiveType.Cube, new Vector3(1.25f, 0.006f, side * 1.25f),
+                    Vector3.zero, new Vector3(2.8f, 0.008f, 0.16f), charred);
+            }
+            for (var i = 0; i < 5; i++)
+                Shape(root, "BrokenLintel", PrimitiveType.Cube, new Vector3(0.35f + (i % 2) * 0.25f, 3.55f + (i % 2) * 0.12f, -1.6f + i * 0.8f),
+                    new Vector3(i * 7f, 11f, 14f - i * 6f), new Vector3(0.72f, 0.38f, 0.86f), concrete);
+            // Visual fragments never snag players, appliances, or the door; the existing building
+            // wall owns collision. The central 3 m doorway and both button approaches remain clear.
+            foreach (var collider in root.GetComponentsInChildren<Collider>()) Object.DestroyImmediate(collider);
+            // Solid torn hull edges enclose the widened seam. They are visible, sit outside the
+            // 3 m entrance, and do not create invisible walls or loose physics clutter.
+            for (var side = -1; side <= 1; side += 2)
+                Shape(root, "FoldedHullEdge", PrimitiveType.Cube, new Vector3(0.65f, 1.95f, side * 2.5f),
+                    new Vector3(side * 3f, 0f, side * 4f), new Vector3(1.9f, 3.9f, 0.24f), hull);
+            // Keep even rotated debris completely outside the cabin-side wall plane.
+            foreach (var renderer in root.GetComponentsInChildren<Renderer>())
+            {
+                var penetration = Ship.Door.x + 0.24f - renderer.bounds.min.x;
+                if (penetration > 0f) renderer.transform.position += Vector3.right * penetration;
+            }
+        }
+
     }
 }

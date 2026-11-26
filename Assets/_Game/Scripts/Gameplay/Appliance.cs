@@ -42,6 +42,7 @@ namespace CoOpHorror.Gameplay
         public readonly NetworkVariable<ulong> StoredBy = new(NoOwner);
         public readonly NetworkVariable<int> StoredSlot = new(-1);
         public readonly NetworkVariable<bool> Swallowed = new(false);
+        public readonly NetworkVariable<bool> Broken = new(false);
         public readonly NetworkVariable<bool> Revealed = new(false);
 
         public bool IsCharged => Charge.Value >= Capacity - 0.01f;
@@ -119,7 +120,7 @@ namespace CoOpHorror.Gameplay
             ProtoAudio.Play(ProtoSound.Click, transform.position, 1f);
             return true;
         }
-        public bool IsGone => IsSpawned && (Swallowed.Value || StoredBy.Value != NoOwner || (StartsHidden && !Revealed.Value));
+        public bool IsGone => IsSpawned && (Broken.Value || Swallowed.Value || StoredBy.Value != NoOwner || (StartsHidden && !Revealed.Value));
         public int ChargePercent => Mathf.FloorToInt(Mathf.Clamp01(Charge.Value / Capacity) * 100f);
         public float GaugeFraction => IsSpawned ? Mathf.Clamp01(Charge.Value / Capacity) : 0f;
         public bool GaugeCharging => false; // the gauge shows while the charge is changing
@@ -151,6 +152,7 @@ namespace CoOpHorror.Gameplay
             foreach (var r in GetComponentsInChildren<Renderer>(true)) if (r.enabled) shown.Add(r);
             renderers = shown.ToArray();
             block = new MaterialPropertyBlock();
+            CoOpHorror.UI.ItemFeedback.Ensure();
         }
 
         public override void OnDestroy()
@@ -170,6 +172,7 @@ namespace CoOpHorror.Gameplay
             StoredBy.Value = NoOwner;
             StoredSlot.Value = -1;
             Swallowed.Value = false;
+            Broken.Value = false;
             Revealed.Value = false;
             Body.isKinematic = StartsHidden;
         }
@@ -197,9 +200,7 @@ namespace CoOpHorror.Gameplay
             if (IsMultitap)
                 return GameText.Format("hover.multitap", DisplayName, OutletsUsed, Outlets.Length, OutletValue)
                     + "\n" + GameText.Get(Plug != null && Plug.InTransmitter ? "hover.multitapLive" : "hover.multitapHint");
-            var head = Value.Value < BaseValue
-                ? GameText.Format("hover.applianceDamaged", DisplayName, Value.Value, BaseValue)
-                : GameText.Format("hover.appliance", DisplayName, Value.Value);
+            var head = DisplayName; // value is the large object label, not duplicated in the prompt
             var tags = new List<string> { GameText.Get(IsCharged ? "hover.charged" : "hover.needsCharge") };
             if (Weight > 1) tags.Add(GameText.Format("hover.heavy", Weight));
             if (Tiny) tags.Add(GameText.Get("hover.tiny"));
@@ -226,7 +227,7 @@ namespace CoOpHorror.Gameplay
                 prompt = GameText.Format("interact.charge", DisplayName, ChargePercent);
                 return InteractKind.Hold;
             }
-            prompt = GrabPrompt(who) + "\n" + GameText.Format("interact.value", Value.Value, BaseValue);
+            prompt = GrabPrompt(who);
             return who.HandsFull ? InteractKind.None : InteractKind.Hold;
         }
 
@@ -258,19 +259,33 @@ namespace CoOpHorror.Gameplay
         // Server: lose a share of the base value (knocks, monster hits).
         public void ServerDamage(float share)
         {
-            if (!IsServer || share <= 0f || Swallowed.Value) return;
-            Value.Value = Mathf.Max(0, Value.Value - Mathf.Max(1, Mathf.RoundToInt(BaseValue * share)));
+            if (!IsServer || share <= 0f || IsGone || BaseValue <= 0) return;
+            ServerLoseValue(Mathf.Max(1, Mathf.RoundToInt(BaseValue * share)));
         }
 
         // Server: being dragged across the floor by its cord.
         public void ServerScrape(float dt)
         {
-            if (!IsServer || Swallowed.Value) return;
+            if (!IsServer || IsGone || BaseValue <= 0) return;
             scrapeDebt += BaseValue * ScrapeLossPerSecond * dt;
             if (scrapeDebt < 1f) return;
             var loss = Mathf.FloorToInt(scrapeDebt);
             scrapeDebt -= loss;
+            ServerLoseValue(loss);
+        }
+
+        private void ServerLoseValue(int loss)
+        {
+            if (!IsServer || Broken.Value) return;
             Value.Value = Mathf.Max(0, Value.Value - loss);
+            if (Value.Value > 0 || BaseValue <= 0) return;
+            ServerReleaseAll();
+            if (Plug != null) Plug.ServerRetire();
+            foreach (var plug in CordPlug.All) if (plug.HostTap == this) plug.ServerRetire();
+            Broken.Value = true;
+            Charge.Value = 0f;
+            if (!Body.isKinematic) { Body.linearVelocity = Vector3.zero; Body.angularVelocity = Vector3.zero; }
+            Body.isKinematic = true;
         }
 
         public void ServerAccelerate(Vector3 acceleration)
@@ -316,6 +331,7 @@ namespace CoOpHorror.Gameplay
             base.FixedUpdate();
             if (!IsServer || !IsSpawned) return;
 
+            if (Broken.Value) return;
             if (StoredBy.Value != NoOwner)
             {
                 // Rides along with the owner, invisible.

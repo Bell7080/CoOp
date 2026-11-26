@@ -100,11 +100,23 @@ namespace CoOpHorror.Gameplay
 
         public override void OnNetworkSpawn()
         {
+            State.OnValueChanged += PlugSound;
             if (!IsServer) return;
             State.Value = PlugState.Stowed;
             Holder.Value = NoHolder;
             Socket.Value = -1;
             SocketHost.Value = NoHolder;
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            State.OnValueChanged -= PlugSound;
+            base.OnNetworkDespawn();
+        }
+        private void PlugSound(PlugState previous,PlugState current)
+        {
+            if(current==PlugState.Socketed)ProtoAudio.Play(ProtoSound.PlugIn,transform.position,0.55f);
+            else if(previous==PlugState.Socketed)ProtoAudio.Play(ProtoSound.PlugOut,transform.position,0.5f);
         }
 
         private bool ApplianceGone => Appliance == null || !Appliance.IsSpawned || Appliance.IsGone;
@@ -156,6 +168,13 @@ namespace CoOpHorror.Gameplay
         }
 
         private float RetractProgress => IsSpawned ? Mathf.Clamp01((float)(NetworkManager.ServerTime.Time - RetractStart.Value) / RetractSeconds) : 1f;
+
+        public void ServerRetire()
+        {
+            if (!IsServer) return;
+            Holder.Value = NoHolder; Socket.Value = -1; SocketHost.Value = NoHolder;
+            State.Value = PlugState.Stowed;
+        }
 
         public void ServerSocket(int socket)
         {

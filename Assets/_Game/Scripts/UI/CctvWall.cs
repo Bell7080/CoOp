@@ -11,7 +11,7 @@ namespace CoOpHorror.UI
     public sealed class CctvWall : MonoBehaviour
     {
         public const int Columns = 4, Rows = 2;
-        public const int TileWidth = 160, TileHeight = 120;
+        public const int TileWidth = 320, TileHeight = 240;
 
         public Renderer[] Tiles;      // Columns * Rows quads, row-major from the top-left
 
@@ -24,7 +24,7 @@ namespace CoOpHorror.UI
 
         private void Awake()
         {
-            atlas = new RenderTexture(TileWidth * Columns, TileHeight * Rows, 16) { name = "CctvWall", filterMode = FilterMode.Point };
+            atlas = new RenderTexture(TileWidth * Columns, TileHeight * Rows, 16) { name = "CctvWall", filterMode = FilterMode.Bilinear };
             var go = new GameObject("CctvWallCamera");
             go.transform.SetParent(transform, false);
             shot = go.AddComponent<Camera>();
@@ -38,6 +38,7 @@ namespace CoOpHorror.UI
             var data = shot.GetUniversalAdditionalCameraData();
             if (UniversalRenderPipeline.asset != null && UniversalRenderPipeline.asset.rendererDataList.Length > CctvView.CctvRendererIndex)
                 data.SetRenderer(CctvView.CctvRendererIndex);
+            data.volumeLayerMask &= ~(1 << 29); // player viewing lens must not bend the preview feeds
             for (var i = 0; i < Tiles.Length; i++)
             {
                 if (Tiles[i] == null) { materials.Add(null); continue; }
@@ -54,7 +55,7 @@ namespace CoOpHorror.UI
 
         private void OnDestroy()
         {
-            if (atlas != null) atlas.Release();
+            if (atlas != null) { atlas.Release(); Destroy(atlas); }
             foreach (var m in materials) if (m != null) Destroy(m);
         }
 

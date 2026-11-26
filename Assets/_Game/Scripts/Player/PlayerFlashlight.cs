@@ -41,9 +41,22 @@ namespace CoOpHorror.Player
         public override void OnNetworkSpawn()
         {
             if (IsServer) On.Value = false;
+            On.OnValueChanged += SwitchSound;
             // Only your own torch casts shadows (cost); it is what carves the dark.
             beam.shadows = IsOwner ? LightShadows.Soft : LightShadows.None;
             beam.shadowStrength = 0.9f;
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            On.OnValueChanged -= SwitchSound;
+            if (IsOwner) { Shader.SetGlobalFloat("_ElecTorch", 0f); Shader.SetGlobalFloat("_ElecVisionActive", 0f); }
+            base.OnNetworkDespawn();
+        }
+
+        private void SwitchSound(bool previous,bool current)
+        {
+            if(previous!=current)ProtoAudio.Play(ProtoSound.FlashSwitch,beam.transform.position,0.4f);
         }
 
         private bool Dead => health != null && health.IsDead.Value;
@@ -64,6 +77,17 @@ namespace CoOpHorror.Player
                 else if (grid != null) grid.ServerTake(DrainPerSecond * Time.deltaTime);
             }
 
+            if (IsOwner)
+            {
+                Shader.SetGlobalFloat("_ElecTorch", On.Value && !Dead ? 1f : 0f);
+                Shader.SetGlobalFloat("_ElecVisionActive", 1f);
+                var camera = Camera.main;
+                if (camera != null)
+                {
+                    Shader.SetGlobalVector("_ElecEye", camera.transform.position);
+                    Shader.SetGlobalVector("_ElecForward", camera.transform.forward);
+                }
+            }
             beam.enabled = On.Value;
             if (!beam.enabled) return;
             // Steady beam; a little dimmer when the shared grid is (nearly) empty. No flicker.

@@ -79,13 +79,15 @@ namespace CoOpHorror.Player
         private void OnHealthChanged(int previous, int current)
         {
             if (current < previous && visual != null) visual.Flash();
+            if (current < previous && current > 0) ProtoAudio.Play(ProtoSound.PlayerHurt, transform.position, 0.65f);
             HealthChanged?.Invoke(previous, current);
         }
 
         private void OnDeadChanged(bool previous, bool current)
         {
             ApplyDeadState(current);
-            if (!current && previous) ProtoAudio.Play(ProtoSound.Zap, transform.position, 1f);
+            if (!current && previous) ProtoAudio.Play(ProtoSound.Revive, transform.position, 0.8f);
+            if (current && !previous) ProtoAudio.Play(ProtoSound.PlayerDeath, transform.position, 0.75f);
         }
 
         // Ghost: invisible and not solid for anyone.

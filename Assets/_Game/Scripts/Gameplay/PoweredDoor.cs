@@ -36,6 +36,16 @@ namespace CoOpHorror.Gameplay
         public const float DoorwayClearance = 1.1f;
         public const float DrainPerSecond = 0.12f; // while shut: ~14 minutes for a full grid
 
+        public override void OnNetworkDespawn()
+        {
+            Open.OnValueChanged -= DoorSound;
+            base.OnNetworkDespawn();
+        }
+        private void DoorSound(bool previous,bool current)
+        {
+            if(previous!=current)ProtoAudio.Play(ProtoSound.DoorMove,transform.position+Vector3.up,0.7f);
+        }
+
         public override bool TargetedBy(Collider c) => Buttons == null || Buttons.Length == 0 || System.Array.IndexOf(Buttons, c) >= 0;
 
         protected override void Awake()
@@ -51,6 +61,8 @@ namespace CoOpHorror.Gameplay
 
         public override void OnNetworkSpawn()
         {
+            base.OnNetworkSpawn();
+            Open.OnValueChanged += DoorSound;
             if (!IsServer) return;
             Charge.Value = 0f;
             Open.Value = false;

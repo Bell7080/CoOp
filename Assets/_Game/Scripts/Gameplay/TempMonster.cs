@@ -22,6 +22,7 @@ namespace CoOpHorror.Gameplay
         public const float SenseRange = 2f;         // right next to it, it notices you whichever way it faces
         public const float LingerAtNoise = 3f;  // seconds spent looking around where it heard something
         public const float AttackCooldown = 1.2f;
+        public const float RecognitionSeconds = 0.6f;
 
         public float PatrolSpeed = 1.8f;
         public float InvestigateSpeed = 2.8f;
@@ -50,6 +51,8 @@ namespace CoOpHorror.Gameplay
         public Renderer[] Eyes;
 
         public readonly NetworkVariable<bool> Chasing = new(false);
+        public readonly NetworkVariable<bool> Recognizing = new(false);
+        private float recognizeUntil;
 
         private NavMeshAgent agent;
         private NetworkTransform sync;
@@ -99,6 +102,7 @@ namespace CoOpHorror.Gameplay
             waypoint = 0;
             nextAttack = 0f;
             Chasing.Value = false;
+            Recognizing.Value = false;
             resetPending = true; // teleport home once the NetworkTransform can commit
             Noise.Server += OnNoise;
         }
@@ -117,6 +121,10 @@ namespace CoOpHorror.Gameplay
             if (sync != null && sync.CanCommitToTransform) sync.Teleport(transform.position, transform.rotation, transform.localScale);
             investigating = false;
             target = null;
+            Recognizing.Value = false;
+            Chasing.Value = false;
+            lungeUntil = 0f;
+            nextRepath = 0f;
         }
 
         private void OnNoise(Vector3 position, float radius)
@@ -153,6 +161,13 @@ namespace CoOpHorror.Gameplay
                 targetHidden = hidden;
                 if (seen != null)
                 {
+                    if (target == null)
+                    {
+                        recognizeUntil = Time.time + RecognitionSeconds;
+                        Recognizing.Value = true;
+                        lungeUntil = 0f;
+                        NoticeFxRpc();
+                    }
                     target = seen;
                     lastSeenTime = Time.time;
                     lastSeenPosition = seen.transform.position;
@@ -165,7 +180,24 @@ namespace CoOpHorror.Gameplay
                 if (target != null && !target.IsDead.Value) { investigating = true; noisePosition = lastSeenPosition; lingerUntil = 0f; }
                 target = null;
             }
-            if (Chasing.Value != (target != null)) Chasing.Value = target != null;
+            // A brief continuous sight cue precedes pursuit; cover can interrupt recognition.
+            if (Recognizing.Value && (target == null || Time.time - lastSeenTime > 0.3f))
+            {
+                Recognizing.Value = false;
+                target = null;
+            }
+            if (Recognizing.Value && Time.time >= recognizeUntil) Recognizing.Value = false;
+            var chasing = target != null && !Recognizing.Value;
+            if (Chasing.Value != chasing) Chasing.Value = chasing;
+            if (Recognizing.Value)
+            {
+                agent.isStopped = true;
+                agent.velocity = Vector3.zero;
+                var direction = Flat(target.transform.position - transform.position);
+                if (direction.sqrMagnitude > 0.01f)
+                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), 180f * Time.deltaTime);
+                return;
+            }
 
             if (target != null)
             {
@@ -264,7 +296,7 @@ namespace CoOpHorror.Gameplay
         // Body slam.
         private void TryAttack()
         {
-            if (Time.time < nextAttack) return;
+            if (!Chasing.Value || Recognizing.Value || Time.time < nextAttack) return;
             foreach (var p in PlayerHealth.All)
             {
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
@@ -281,12 +313,14 @@ namespace CoOpHorror.Gameplay
             }
         }
 
+        [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
+        private void NoticeFxRpc() => ProtoAudio.Play(ProtoSound.MonsterNotice, transform.position, 0.7f);
+
         // Every peer: start of a lunge (animation burst + sound).
         [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
         private void LungeFxRpc()
         {
-            ProtoAudio.Play(ProtoSound.Buzz, transform.position, 0.8f);
-            ProtoAudio.Play(ProtoSound.Rumble, transform.position, 0.9f); // ku-gu-gu-gu charge
+            ProtoAudio.Play(ProtoSound.MonsterLunge, transform.position, 0.85f);
             var rig = GetComponentInChildren<RigAnimator>();
             if (rig != null) rig.PlayOnce(rig.AttackState, 0.8f);
         }
@@ -295,7 +329,7 @@ namespace CoOpHorror.Gameplay
         [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
         private void HitFxRpc(ulong victim)
         {
-            ProtoAudio.Play(ProtoSound.Bang, transform.position, 1f);
+            ProtoAudio.Play(ProtoSound.MonsterHit, transform.position, 0.85f);
             var rig = GetComponentInChildren<RigAnimator>();
             if (rig != null) rig.PlayOnce(rig.AttackState, 0.6f);
             if (NetworkManager != null && victim == NetworkManager.LocalClientId) CrashIntro.Scare(0.35f, 0.6f);
@@ -306,6 +340,7 @@ namespace CoOpHorror.Gameplay
             if (Eyes == null) return;
             var chasing = IsSpawned && Chasing.Value;
             var color = chasing ? new Color(1f, 0.1f, 0.05f) * (1f + Mathf.PingPong(Time.time * 5f, 0.6f)) : new Color(0.55f, 0.08f, 0.05f);
+            if (IsSpawned && Recognizing.Value) color = new Color(1f, 0.52f, 0.08f);
             foreach (var eye in Eyes)
             {
                 if (eye == null) continue;

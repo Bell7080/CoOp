@@ -130,6 +130,7 @@ namespace CoOpHorror.Editor
                 ChooseRoomPattern(room, roomRoot);
                 BuildBlockers(roomRoot, room);
             }
+            BuildShipBreach(map);
             Scatter(map);
             CullBlocked(map.Find("Clutter"));
             emergencyLights = emergency.ToArray();

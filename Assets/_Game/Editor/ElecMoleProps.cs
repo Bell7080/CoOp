@@ -188,6 +188,13 @@ namespace CoOpHorror.Editor
 
         private static void Dressed(Transform group, string model, Vector3 bottom, Vector3 size, float yaw = 0f, bool uniform = false)
         {
+            if(group.name=="Desk"||group.name=="Table"||group.name=="Bench")
+            {
+                Unrender(group);
+                DressOpenFurniture(group,bottom,size);
+                FitFurnitureCollision(group);
+                return;
+            }
             if (PropModel(model) == null) return; // keep the blockout look when a model is missing
             Unrender(group);
             Dress(group, model, bottom, size, yaw, uniform);

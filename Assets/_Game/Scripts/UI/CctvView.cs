@@ -14,14 +14,15 @@ namespace CoOpHorror.UI
 {
     // Local CCTV viewing in the style of surveillance-room horror games.
     // One render camera draws the selected CCTV camera (lit by that camera's own lamp) into a low-res texture.
-    // The CoOp/CctvFisheye material shows it on a curved CRT, both on the ship's monitor and full screen.
-    // Full screen: the cursor is free. A map in the corner shows the ship and, as each camera is powered,
+    // The feed fills the physical CRT; entering leans the player camera toward its glass.
+    // At the monitor: the cursor is free. A map in the corner shows the ship and, as each camera is powered,
     // the route from the ship to it with a button to switch. Drag on the picture to pan/tilt the real camera
     // head, wheel zooms, A/D or 1-9 switch, Q / Tab / Esc / right click leave. Damage or death closes it.
+    [DefaultExecutionOrder(100)]
     public sealed class CctvView : MonoBehaviour
     {
-        public const int FeedWidth = 640;
-        public const int FeedHeight = 480;
+        public const int FeedWidth = 1280;
+        public const int FeedHeight = 960;
         public const float SourceHalfFovH = 66f;
         public const float DragSensitivity = 0.12f;
         public const float MonitorCycleSeconds = 3.5f;
@@ -52,6 +53,17 @@ namespace CoOpHorror.UI
         private int mapMask = -1;
         private readonly Dictionary<CctvCamera, Vector3[]> routes = new();
         private bool viewing;
+        private Camera playerCamera;
+        private Vector3 savedCameraPosition, approachPosition;
+        private Quaternion savedCameraRotation, approachRotation;
+        private float savedFov;
+        private bool savedPostProcessing;
+        private LayerMask savedVolumeMask;
+        private Volume viewingVolume;
+        private VolumeProfile viewingProfile;
+        private Renderer monitorScreen;
+        private const int ViewingLayer = 29; // runtime-only lens volume
+
         private float enteredAt;
         private int enteredFrame;
         private int index;
@@ -65,6 +77,7 @@ namespace CoOpHorror.UI
         // Minimap page (arrow button): rooms with a powered camera, green dots for players, red for monsters.
         private bool minimapPage;
         private RectTransform minimapRoot, minimapContent;
+        private RadarDisplay radar;
         private Text pageButtonText;
         private int miniMask = -1;
         private float miniScale = 1f;
@@ -89,14 +102,14 @@ namespace CoOpHorror.UI
         {
             Instance = this;
             CctvPanel.OpenView = Enter;
-            feed = new RenderTexture(FeedWidth, FeedHeight, 16) { name = "CctvFeed", filterMode = FilterMode.Point };
+            feed = new RenderTexture(FeedWidth, FeedHeight, 16) { name = "CctvFeed", filterMode = FilterMode.Bilinear };
 
             var cameraObject = new GameObject("CctvRenderCamera");
             cameraObject.transform.SetParent(transform, false);
             renderCamera = cameraObject.AddComponent<Camera>();
             renderCamera.enabled = false;
             renderCamera.targetTexture = feed;
-            renderCamera.fieldOfView = 2f * Mathf.Atan(Mathf.Tan(SourceHalfFovH * Mathf.Deg2Rad) * FeedHeight / FeedWidth) * Mathf.Rad2Deg;
+            renderCamera.fieldOfView = 2f * Mathf.Atan(Mathf.Tan(45f * Mathf.Deg2Rad) * FeedHeight / FeedWidth) * Mathf.Rad2Deg;
             renderCamera.nearClipPlane = 0.05f;
             renderCamera.farClipPlane = 80f;
             renderCamera.clearFlags = CameraClearFlags.SolidColor;
@@ -107,6 +120,7 @@ namespace CoOpHorror.UI
             if (UnityEngine.Rendering.Universal.UniversalRenderPipeline.asset != null &&
                 UnityEngine.Rendering.Universal.UniversalRenderPipeline.asset.rendererDataList.Length > CctvRendererIndex)
                 data.SetRenderer(CctvRendererIndex);
+            data.volumeLayerMask &= ~(1 << ViewingLayer);
             RenderPipelineManager.beginCameraRendering += OnBeginCamera;
             RenderPipelineManager.endCameraRendering += OnEndCamera;
 
@@ -122,6 +136,10 @@ namespace CoOpHorror.UI
         {
             var panel = CctvPanel.Instance != null ? CctvPanel.Instance : FindFirstObjectByType<CctvPanel>();
             if (panel == null || panel.Screen == null || FeedMaterial == null) return;
+            monitorScreen = panel.Screen;
+            // Slight overscan covers the measured glass opening of the 3D CRT.
+            var screenScale = monitorScreen.transform.localScale;
+            monitorScreen.transform.localScale = Vector3.Scale(screenScale, new Vector3(1.025f, 1.035f, 1f));
             monitorMaterial = MakeMaterial(4f / 3f);
             panel.Screen.sharedMaterial = monitorMaterial;
         }
@@ -133,7 +151,8 @@ namespace CoOpHorror.UI
             if (viewing) Exit();
             if (Instance == this) Instance = null;
             if (CctvPanel.OpenView == (System.Func<bool>)Enter) CctvPanel.OpenView = null;
-            if (feed != null) feed.Release();
+            if (feed != null) { feed.Release(); Destroy(feed); }
+            if (viewingProfile != null) Destroy(viewingProfile);
             if (viewMaterial != null) Destroy(viewMaterial);
             if (monitorMaterial != null) Destroy(monitorMaterial);
         }
@@ -170,7 +189,34 @@ namespace CoOpHorror.UI
         public bool Enter()
         {
             var me = PlayerHealth.Local;
-            if (viewing || me == null || me.IsDead.Value || viewMaterial == null || CctvCamera.All.Count == 0) return false;
+            if (viewing || me == null || me.IsDead.Value || monitorScreen == null || Camera.main == null || CctvCamera.All.Count == 0) return false;
+            playerCamera = Camera.main;
+            savedCameraPosition = playerCamera.transform.localPosition;
+            savedCameraRotation = playerCamera.transform.localRotation;
+            approachPosition = playerCamera.transform.position;
+            approachRotation = playerCamera.transform.rotation;
+            savedFov = playerCamera.fieldOfView;
+            var cameraData = playerCamera.GetUniversalAdditionalCameraData();
+            savedPostProcessing = cameraData.renderPostProcessing;
+            savedVolumeMask = cameraData.volumeLayerMask;
+            cameraData.renderPostProcessing = true;
+            cameraData.volumeLayerMask |= 1 << ViewingLayer;
+            if (viewingVolume == null)
+            {
+                var volumeGo = new GameObject("MonitorViewingLens");
+                volumeGo.transform.SetParent(transform, false);
+                volumeGo.layer = ViewingLayer;
+                viewingVolume = volumeGo.AddComponent<Volume>();
+                viewingVolume.isGlobal = true;
+                viewingVolume.priority = 100f;
+                viewingProfile = ScriptableObject.CreateInstance<VolumeProfile>();
+                viewingVolume.sharedProfile = viewingProfile;
+                var lens = viewingProfile.Add<LensDistortion>(true);
+                lens.intensity.Override(-0.28f);
+                lens.scale.Override(1.04f);
+            }
+            viewingVolume.weight = 0f;
+            viewingVolume.enabled = true;
             viewing = true;
             enteredAt = Time.unscaledTime;
             enteredFrame = Time.frameCount;
@@ -188,6 +234,17 @@ namespace CoOpHorror.UI
         {
             if (index >= 0 && index < CctvCamera.All.Count) CctvCamera.All[index].ReleaseLocalAim();
             viewing = false;
+            if (playerCamera != null)
+            {
+                playerCamera.transform.localPosition = savedCameraPosition;
+                playerCamera.transform.localRotation = savedCameraRotation;
+                playerCamera.fieldOfView = savedFov;
+                var data = playerCamera.GetUniversalAdditionalCameraData();
+                data.renderPostProcessing = savedPostProcessing;
+                data.volumeLayerMask = savedVolumeMask;
+            }
+            playerCamera = null;
+            if (viewingVolume != null) viewingVolume.enabled = false;
             dragging = false;
             if (minimapPage) ToggleMinimap();
             canvas.enabled = false;
@@ -229,6 +286,8 @@ namespace CoOpHorror.UI
             var me = PlayerHealth.Local;
             var stage = StageDirector.Instance;
             var forced = me == null || me.IsDead.Value || me.Health.Value < lastHealth || cams.Count == 0
+                || monitorScreen == null || playerCamera == null
+                || (me != null && monitorScreen != null && Vector3.Distance(me.transform.position, monitorScreen.bounds.center) > 4.5f)
                 || (stage != null && stage.IsSpawned && stage.Phase.Value >= StagePhase.Escaped);
             if (me != null) lastHealth = me.Health.Value;
             var k = Keyboard.current;
@@ -306,7 +365,22 @@ namespace CoOpHorror.UI
             // Lean in toward the monitor.
             var lean = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((Time.unscaledTime - enteredAt) / 0.25f));
             group.alpha = lean;
-            feedRect.localScale = Vector3.one * Mathf.Lerp(0.86f, 1f, lean);
+            if (playerCamera != null && monitorScreen != null)
+            {
+                var screen = monitorScreen.transform;
+                var width = screen.TransformVector(Vector3.right).magnitude;
+                var height = screen.TransformVector(Vector3.up).magnitude;
+                const float viewingFov = 72f;
+                var halfTan = Mathf.Tan(viewingFov * 0.5f * Mathf.Deg2Rad);
+                var distance = Mathf.Max(height, width / playerCamera.aspect) * 0.5f / halfTan * 1.32f;
+                distance = Mathf.Max(distance, playerCamera.nearClipPlane + 0.12f);
+                var centre = screen.TransformPoint(Vector3.zero);
+                playerCamera.transform.SetPositionAndRotation(
+                    Vector3.Lerp(approachPosition, centre - screen.forward * distance, lean),
+                    Quaternion.Slerp(approachRotation, Quaternion.LookRotation(screen.forward, screen.up), lean));
+                playerCamera.fieldOfView = Mathf.Lerp(savedFov, viewingFov, lean);
+                viewingVolume.weight = lean;
+            }
             UpdateOverlay(cam, live);
             UpdateMap();
             UpdateMinimap();
@@ -317,6 +391,7 @@ namespace CoOpHorror.UI
         public void ToggleMinimap()
         {
             minimapPage = !minimapPage;
+            if (mapContent != null) mapContent.parent.gameObject.SetActive(!minimapPage);
             dragging = false;
             pageButtonText.text = GameText.Get(minimapPage ? "cctv.pageFeed" : "cctv.pageMinimap");
             var me = PlayerHealth.Local;
@@ -356,60 +431,30 @@ namespace CoOpHorror.UI
                 rect.sizeDelta = new Vector2(14f, 14f);
                 var image = go.GetComponent<Image>();
                 image.raycastTarget = false;
+                image.sprite = RadarDisplay.Ping;
                 miniDots.Add(image);
             }
             var dot = miniDots[used++];
             dot.enabled = true;
+            var pulse = 0.65f + 0.35f * Mathf.Sin(Time.time * 2.5f + used);
+            color.a = pulse;
             dot.color = color;
             dot.rectTransform.SetAsLastSibling();
-            dot.rectTransform.anchoredPosition = new Vector2((position.x - miniMid.x) * miniScale, (position.z - miniMid.z) * miniScale);
+            dot.rectTransform.anchoredPosition = radar != null ? radar.Project(position) : new Vector2((position.x - miniMid.x) * miniScale, (position.z - miniMid.z) * miniScale);
         }
 
         private void RebuildMinimap()
         {
-            foreach (var dot in miniDots) if (dot != null) Destroy(dot.gameObject);
-            miniDots.Clear();
-            foreach (Transform child in minimapContent) Destroy(child.gameObject);
             miniRooms.Clear();
-            var cams = CctvCamera.All;
             var stage = StageDirector.Instance;
-            // Fit every watched room plus the ship so the layout does not jump as cameras come on.
-            var min = stage != null ? stage.ShipMin : Vector3.zero;
-            var max = stage != null ? stage.ShipMax : Vector3.zero;
-            foreach (var c in cams) { min = Vector3.Min(min, c.RoomMin); max = Vector3.Max(max, c.RoomMax); }
-            miniScale = Mathf.Min((MiniWidth - 60f) / Mathf.Max(8f, max.x - min.x), (MiniHeight - 90f) / Mathf.Max(8f, max.z - min.z));
-            miniMid = (min + max) * 0.5f;
-            Vector2 ToMini(Vector3 w) => new((w.x - miniMid.x) * miniScale, (w.z - miniMid.z) * miniScale);
-            RectTransform Box(string name, Vector3 a, Vector3 b, Color color)
+            if (stage != null) miniRooms.Add((stage.ShipMin, stage.ShipMax));
+            foreach (var cam in CctvCamera.All)
             {
-                var go = new GameObject(name, typeof(RectTransform), typeof(Image));
-                var rect = go.GetComponent<RectTransform>();
-                rect.SetParent(minimapContent, false);
-                rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
-                rect.anchoredPosition = (ToMini(a) + ToMini(b)) * 0.5f;
-                rect.sizeDelta = new Vector2(Mathf.Abs(b.x - a.x), Mathf.Abs(b.z - a.z)) * miniScale - new Vector2(4f, 4f);
-                var image = go.GetComponent<Image>();
-                image.color = color;
-                image.raycastTarget = false;
-                var outline = go.AddComponent<Outline>();
-                outline.effectColor = new Color(0.8f, 0.9f, 0.85f, 0.9f);
-                outline.effectDistance = new Vector2(1.5f, -1.5f);
-                return rect;
+                if (!cam.Online || cam.RoomMin == cam.RoomMax) continue;
+                var room = (cam.RoomMin, cam.RoomMax);
+                if (!miniRooms.Contains(room)) miniRooms.Add(room);
             }
-            if (stage != null)
-            {
-                var ship = Box("Ship", stage.ShipMin, stage.ShipMax, new Color(0.25f, 0.45f, 0.2f, 0.6f));
-                MapLabelOn(ship, GameText.Get("cctv.mapShip"), 16);
-            }
-            for (var i = 0; i < cams.Count; i++)
-            {
-                if (!cams[i].Online || cams[i].RoomMax == cams[i].RoomMin) continue;
-                var range = (cams[i].RoomMin, cams[i].RoomMax);
-                if (miniRooms.Contains(range)) continue;
-                miniRooms.Add(range);
-                var room = Box("Room_" + (i + 1), range.Item1, range.Item2, new Color(0.16f, 0.18f, 0.18f, 0.95f));
-                MapLabelOn(room, $"CAM {i + 1:00}", 15);
-            }
+            if (radar != null) radar.SetRooms(miniRooms);
         }
 
         private static void MapLabelOn(RectTransform parent, string value, int size)
@@ -444,10 +489,10 @@ namespace CoOpHorror.UI
         private void UpdateOverlay(CctvCamera cam, bool live)
         {
             var rec = Mathf.PingPong(Time.unscaledTime, 1f) > 0.5f ? GameText.Get("cctv.rec") : "      ";
-            nameText.text = rec + "  " + cam.DisplayName;
+            nameText.text = minimapPage ? GameText.Get("cctv.radarTitle") : rec + "  " + cam.DisplayName;
             timeText.text = System.DateTime.Now.ToString("HH:mm:ss");
-            zoomText.text = GameText.Format("cctv.zoom", zoom.ToString("0.0"));
-            centerText.text = live ? string.Empty : GameText.Get("cctv.noSignal");
+            zoomText.text = minimapPage ? GameText.Get("cctv.radarLegend") : GameText.Format("cctv.zoom", zoom.ToString("0.0"));
+            centerText.text = live || minimapPage ? string.Empty : GameText.Get("cctv.noSignal");
         }
 
         // ---------- map ----------
@@ -620,7 +665,7 @@ namespace CoOpHorror.UI
 
             var back = new GameObject("Black", typeof(RectTransform), typeof(Image));
             Stretch(back.GetComponent<RectTransform>(), canvas.transform);
-            back.GetComponent<Image>().color = Color.black;
+            back.SetActive(false); // keep the actual monitor frame and room visible
             back.GetComponent<Image>().raycastTarget = false;
             var imageGo = new GameObject("Feed", typeof(RectTransform), typeof(RawImage));
             feedRect = imageGo.GetComponent<RectTransform>();
@@ -628,6 +673,7 @@ namespace CoOpHorror.UI
             var image = imageGo.GetComponent<RawImage>();
             image.texture = feed;
             image.material = viewMaterial;
+            imageGo.SetActive(false); // feed stays on the 3D monitor
             image.raycastTarget = false;
 
             var feedColor = new Color(0.86f, 0.95f, 0.9f);
@@ -668,6 +714,13 @@ namespace CoOpHorror.UI
             miniImage.color = new Color(0.02f, 0.04f, 0.03f, 0.97f);
             miniImage.raycastTarget = true;
             mini.AddComponent<Outline>().effectColor = new Color(0.5f, 0.75f, 0.55f, 0.8f);
+            var radarGo = new GameObject("PerspectiveRadar", typeof(RectTransform), typeof(RawImage));
+            var radarRect = radarGo.GetComponent<RectTransform>();
+            radarRect.SetParent(minimapRoot, false);
+            radarRect.anchorMin = radarRect.anchorMax = new Vector2(0.5f, 0.5f);
+            radarRect.anchoredPosition = new Vector2(0f, -20f);
+            radarRect.sizeDelta = new Vector2(860f, 540f);
+            radar = radarGo.AddComponent<RadarDisplay>();
             var miniContent = new GameObject("Content", typeof(RectTransform));
             minimapContent = miniContent.GetComponent<RectTransform>();
             minimapContent.SetParent(minimapRoot, false);

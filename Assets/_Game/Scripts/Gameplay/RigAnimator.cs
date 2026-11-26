@@ -55,6 +55,47 @@ namespace CoOpHorror.Gameplay
             Animator.CrossFadeInFixedTime(state, 0.05f, 0, 0f);
         }
 
+        // The torso needs a firm core: suppress only its authored bend/bounce. The limbs and
+        // nose retain their clips and spring chains, and the crouching pose stays fully soft.
+        private struct FirmBone
+        {
+            public Transform Bone;
+            public Vector3 Position, Scale;
+            public Quaternion Rotation;
+            public float Motion;
+        }
+        private FirmBone[] firmBody;
+        private float crouchSoftness;
+
+        private void CacheFirmBody()
+        {
+            if (player == null || Animator == null) return;
+            var bones = new System.Collections.Generic.List<FirmBone>();
+            foreach (var bone in Animator.GetComponentsInChildren<Transform>())
+            {
+                var motion = bone.name == "Hips" ? 0.35f : bone.name == "Spine" ? 0.22f : bone.name == "Head" ? 0.15f : -1f;
+                if (motion < 0f) continue;
+                bones.Add(new FirmBone { Bone = bone, Position = bone.localPosition,
+                    Rotation = bone.localRotation, Scale = bone.localScale, Motion = motion });
+            }
+            firmBody = bones.ToArray();
+        }
+
+        private void StabilizeBody()
+        {
+            if (firmBody == null || player == null) return;
+            var crouched = player.IsSpawned && player.Crouched.Value;
+            crouchSoftness = Mathf.MoveTowards(crouchSoftness, crouched ? 1f : 0f, Time.deltaTime * 8f);
+            foreach (var rest in firmBody)
+            {
+                if (rest.Bone == null) continue;
+                var amount = Mathf.Lerp(rest.Motion, 1f, crouchSoftness);
+                rest.Bone.localPosition = Vector3.Lerp(rest.Position, rest.Bone.localPosition, amount);
+                rest.Bone.localRotation = Quaternion.Slerp(rest.Rotation, rest.Bone.localRotation, amount);
+                rest.Bone.localScale = Vector3.Lerp(rest.Scale, rest.Bone.localScale, amount);
+            }
+        }
+
         private Vector3[][] tipPositions;
         private Vector3[][] tipVelocities;
 
@@ -65,6 +106,7 @@ namespace CoOpHorror.Gameplay
             monster = MotionRoot.GetComponent<TempMonster>();
             if (Animator == null) Animator = GetComponentInChildren<Animator>();
             last = MotionRoot.position;
+            CacheFirmBody();
         }
 
         private void OnEnable()
@@ -114,6 +156,7 @@ namespace CoOpHorror.Gameplay
         // Spring lag: each bone's tip trails its animated position and the bone turns to follow it.
         private void LateUpdate()
         {
+            StabilizeBody();
             if (Floppy == null || Floppy.Length == 0) return;
             var dt = Mathf.Min(Time.deltaTime, 0.05f);
             if (dt <= 0f) return;

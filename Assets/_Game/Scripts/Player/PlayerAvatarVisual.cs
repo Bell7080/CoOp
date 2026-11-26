@@ -91,7 +91,7 @@ namespace CoOpHorror.Player
             if (BodyRoot == null) return;
 
             // Firm jelly: the body barely wobbles by itself, but leans and squashes against sudden changes of
-            // movement (inertia), then springs back. Works for remote players too (from the replicated motion).
+            // movement (inertia), then settles quickly without losing the face silhouette. Works for remote players too (from the replicated motion).
             var dt = Mathf.Max(Time.deltaTime, 0.0001f);
             var velocity = (transform.position - lastPosition) / dt;
             lastPosition = transform.position;
@@ -104,9 +104,9 @@ namespace CoOpHorror.Player
             if (motor != null && motor.IsSpawned && motor.Crouched.Value) target = Crouched;
             else
             {
-                var stretch = Mathf.Clamp(velocity.y * 0.008f, -0.05f, 0.05f);
-                var wobble = Mathf.Sin(Time.time * 11f) * 0.004f * Mathf.Clamp01(flat / 4f);
-                var jolt = Mathf.Clamp01(new Vector2(smoothedAccel.x, smoothedAccel.z).magnitude / 30f) * 0.05f;
+                var stretch = Mathf.Clamp(velocity.y * 0.002f, -0.014f, 0.014f);
+                var wobble = Mathf.Sin(Time.time * 8f) * 0.0015f * Mathf.Clamp01(flat / 4f);
+                var jolt = Mathf.Clamp01(new Vector2(smoothedAccel.x, smoothedAccel.z).magnitude / 30f) * 0.012f;
                 target = new Vector3(1f - stretch * 0.5f - wobble + jolt, 1f + stretch + wobble - jolt, 1f - stretch * 0.5f - wobble + jolt);
             }
             squash = Vector3.SmoothDamp(squash, target, ref squashVelocity, 0.08f, 40f, dt);
@@ -114,7 +114,7 @@ namespace CoOpHorror.Player
 
             // Lean away from the acceleration (start, stop, sidestep, turn), damped spring back.
             var localAccel = transform.InverseTransformDirection(new Vector3(smoothedAccel.x, 0f, smoothedAccel.z));
-            var leanTarget = new Vector3(Mathf.Clamp(-localAccel.z * 0.35f, -9f, 9f), 0f, Mathf.Clamp(localAccel.x * 0.35f, -9f, 9f));
+            var leanTarget = new Vector3(Mathf.Clamp(-localAccel.z * 0.09f, -2.5f, 2.5f), 0f, Mathf.Clamp(localAccel.x * 0.09f, -2.5f, 2.5f));
             lean = Vector3.SmoothDamp(lean, leanTarget, ref leanVelocity, 0.12f, 200f, dt);
             BodyRoot.localRotation = Quaternion.Euler(lean.x, 0f, lean.z);
         }

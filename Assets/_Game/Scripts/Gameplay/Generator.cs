@@ -103,8 +103,8 @@ namespace CoOpHorror.Gameplay
             Body.localPosition = bodyRest + Vector3.up * stroke * amount + Random.insideUnitSphere * amount * 0.15f;
             if (spinSpeed > 60f && Time.time >= nextChug)
             {
-                nextChug = Time.time + 1f / Mathf.Max(rate, 0.5f);
-                ProtoAudio.PlayPitched(ProtoSound.Clunk, transform.position, 0.35f, 0.8f + Random.value * 0.2f);
+                nextChug = Time.time + 0.7f;
+                ProtoAudio.PlayPitched(ProtoSound.GeneratorCrank, transform.position, 0.22f, 0.95f + Random.value * 0.1f);
             }
         }
     }

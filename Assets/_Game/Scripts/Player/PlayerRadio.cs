@@ -62,7 +62,7 @@ namespace CoOpHorror.Player
             if (local == null) return;
             var mode = current != RadioMode.Off ? current : previous;
             if (local == this || VoiceRouting.HearsOverRadio(local, this, mode))
-                ProtoAudio.Play(ProtoSound.Click, Camera.main != null ? Camera.main.transform.position : transform.position, 0.5f);
+                ProtoAudio.Play(ProtoSound.Radio, Camera.main != null ? Camera.main.transform.position : transform.position, 0.35f);
         }
 
         public static PlayerRadio LocalRadio => PlayerInteractor.Local != null ? PlayerInteractor.Local.GetComponent<PlayerRadio>() : null;
