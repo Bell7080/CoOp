@@ -7,7 +7,7 @@ using UnityEngine.UI;
 namespace CoOpHorror.UI
 {
     // Runtime-built HUD for the ElecMole stage prototype. Reads replicated state only.
-    // Top-left: health and stamina. Left: shared-power battery gauge and flashlight. Top: objective.
+    // Top-left: health and stamina. Left: the nose's energy tank (W) and the team's money. Top: objective.
     // Centre: interaction prompt, skill-check ring, monster warning and stage banners.
     public sealed class PrototypeHud : MonoBehaviour
     {
@@ -38,6 +38,7 @@ namespace CoOpHorror.UI
         private static readonly Vector2 Left = new(0f, 0.5f);
         private static readonly Color TextColor = new(0.86f, 0.97f, 0.95f);
         private static readonly Color Electric = new(0.35f, 0.95f, 1f);
+        private static readonly Color TankColor = new(1f, 0.78f, 0.3f);
 
         private void Awake()
         {
@@ -60,8 +61,8 @@ namespace CoOpHorror.UI
             healthFill = MakeBar("Health", TopLeft, new Vector2(24, -44), new Vector2(BarWidth, 14), new Color(0.95f, 0.25f, 0.22f), out _);
             staminaFill = MakeBar("Stamina", TopLeft, new Vector2(24, -64), new Vector2(BarWidth, 8), new Color(0.75f, 0.95f, 0.35f), out staminaImage);
 
-            // Left: battery gauge (shared power).
-            batteryFill = MakeVerticalBar("Battery", Left, new Vector2(30, 20), new Vector2(28, BatteryHeight), Electric, out batteryImage);
+            // Left: the nose's energy tank (where the shared-power gauge used to be), money under it.
+            batteryFill = MakeVerticalBar("Battery", Left, new Vector2(30, 20), new Vector2(28, BatteryHeight), TankColor, out batteryImage);
             batteryText = MakeText("BatteryText", 12, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 8), new Vector2(200, 24), new Vector2(0, 1));
             batteryNumber = MakeNumber("BatteryNumber", 24, Left, new Vector2(66, 20 + BatteryHeight / 2f - 4), new Vector2(0, 1));
             flashlightText = MakeText("FlashlightText", 14, TextAnchor.UpperLeft, Left, new Vector2(24, 20 - BatteryHeight / 2f - 30), new Vector2(240, 22), new Vector2(0, 1));
@@ -136,19 +137,21 @@ namespace CoOpHorror.UI
             SetWidth(staminaFill, BarWidth, stamina);
             staminaImage.color = motor != null && motor.Exhausted ? new Color(0.9f, 0.45f, 0.2f) : new Color(0.75f, 0.95f, 0.35f);
 
-            var grid = PowerGrid.Instance;
-            var fraction = grid != null && grid.IsSpawned ? grid.Fraction : 0f;
+            var tank = me.GetComponent<PlayerNose>();
+            var fraction = tank != null ? tank.Fraction : 0f;
             batteryFill.sizeDelta = new Vector2(batteryFill.sizeDelta.x, (BatteryHeight - 6) * fraction);
-            batteryImage.color = fraction < PlayerFlashlight.LowPowerFraction ? new Color(1f, 0.3f, 0.2f) : Electric;
-            batteryText.text = GameText.Get("hud.powerLabel");
-            batteryNumber.text = Mathf.FloorToInt(fraction * 100f).ToString("000");
+            var flow = tank != null && tank.IsSpawned ? tank.Flow.Value : PlayerNose.FlowNone;
+            batteryImage.color = flow != PlayerNose.FlowNone ? Color.Lerp(TankColor, Color.white, Mathf.PingPong(Time.time * 4f, 0.5f))
+                : tank != null && tank.Fraction >= 1f ? new Color(0.45f, 1f, 0.6f) : TankColor;
+            batteryText.text = GameText.Get("hud.tankLabel");
+            batteryNumber.text = (tank != null && tank.IsSpawned ? Mathf.FloorToInt(tank.Energy.Value) : 0).ToString("000"); // seven-segment digits only (the label says W)
             batteryNumber.color = batteryImage.color;
-            var flashlight = me.GetComponent<PlayerFlashlight>();
-            flashlightText.text = string.Empty; // no guide text
+            var stage = StageDirector.Instance;
+            flashlightText.text = GameText.Format("hud.money", stage != null && stage.IsSpawned ? stage.Money.Value : 0);
+            flashlightText.color = new Color(1f, 0.85f, 0.4f);
 
             UpdateObjective(health);
             UpdateSkillCheck(me.Check);
-            UpdateInventory(me);
             UpdateRadio(me);
 
             var wanted = FirstPersonController.CursorCaptured && !FirstPersonController.ViewLocked ? KeyPrompt(me) : string.Empty;
@@ -197,8 +200,7 @@ namespace CoOpHorror.UI
                     var door = stage != null ? stage.ShipDoor : null;
                     if (door != null && door.IsSpawned && !door.Open.Value) objective = GameText.Get("proto.objectiveDoor");
                     else if (transmitter == null || !transmitter.IsSpawned) objective = string.Empty;
-                    else if (transmitter.Phase.Value == TransmitterPhase.Dormant) objective = GameText.Get("proto.objectiveTransmitter");
-                    else if (transmitter.Phase.Value == TransmitterPhase.Active) objective = GameText.Format("proto.objective", transmitter.PluggedCount, transmitter.Required, transmitter.PluggedValue);
+                    else if (transmitter.Phase.Value == TransmitterPhase.Charging) objective = GameText.Format("proto.objective", transmitter.StoredWatts, transmitter.RequiredWatts);
                     else
                     {
                         objective = GameText.Get("proto.settling");
@@ -214,6 +216,12 @@ namespace CoOpHorror.UI
                     break;
                 case StagePhase.Launching:
                     objective = GameText.Format("proto.launching", Mathf.CeilToInt(stage.LaunchRemaining));
+                    // the facility went dark with the transmitter: run back
+                    if (!stage.InShip(PlayerInteractor.Local.transform.position))
+                    {
+                        banner = Mathf.PingPong(Time.unscaledTime, 1f) > 0.3f ? GameText.Format("proto.blackoutRun", Mathf.CeilToInt(stage.LaunchRemaining)) : string.Empty;
+                        bannerColor = new Color(1f, 0.35f, 0.25f);
+                    }
                     break;
                 case StagePhase.Escaped:
                     var aboard = health != null && stage.IsAboard(health.OwnerClientId);
@@ -256,18 +264,6 @@ namespace CoOpHorror.UI
             }
         }
 
-        private void UpdateInventory(PlayerInteractor me)
-        {
-            var inventory = me.GetComponent<PlayerInventory>();
-            if (inventory == null || !inventory.IsSpawned) { inventoryText.text = string.Empty; return; }
-            var line = new System.Text.StringBuilder(GameText.Get("proto.inventory"));
-            for (var i = 0; i < inventory.Slots.Value; i++)
-            {
-                var item = inventory.InSlot(i);
-                line.Append("  [").Append(i + 1).Append("] ").Append(item != null ? item.DisplayName : GameText.Get("proto.slotEmpty"));
-            }
-            inventoryText.text = line.ToString();
-        }
 
         // Who is on the radio: what I send, and what I would hear over the radio.
         private void UpdateRadio(PlayerInteractor me)
@@ -368,14 +364,8 @@ namespace CoOpHorror.UI
                 case InteractKind.PressOrHold: keys.Add("[ LEFT MOUSE ]"); break;
                 case InteractKind.Hold: keys.Add("[ HOLD LEFT MOUSE ]"); break;
             }
-            if (keys.Count == 0 && me.HoldingUse) keys.Add("[ HOLD LEFT MOUSE ]");
-            switch (me.PlugKeyAction)
-            {
-                case PlayerInteractor.PlugAction.Take: keys.Add("[ E ] " + GameText.Get("hud.plugTake")); break;
-                case PlayerInteractor.PlugAction.Socket:
-                case PlayerInteractor.PlugAction.SocketTap: keys.Add("[ E ] " + GameText.Get("hud.plugSocket")); break;
-                case PlayerInteractor.PlugAction.Return: keys.Add("[ E ] " + GameText.Get("hud.plugReturn")); break;
-            }
+            if (me.TargetKindRight == InteractKind.Hold) keys.Add("[ HOLD RIGHT MOUSE ]");
+            if (keys.Count == 0 && me.HoldingUse) keys.Add("[ HOLD MOUSE ]");
             return string.Join("   ", keys);
         }
 

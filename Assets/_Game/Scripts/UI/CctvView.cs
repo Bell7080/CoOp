@@ -329,7 +329,7 @@ namespace CoOpHorror.UI
             var cams = CctvCamera.All;
             CctvCamera cam = null;
             if (viewing && index < cams.Count) cam = cams[index];
-            else if (monitorMaterial != null && LocalAliveInShip() && cams.Count > 0)
+            else if (monitorMaterial != null && LocalViewInShip() && cams.Count > 0)
             {
                 if (Time.time >= monitorNext || monitorIndex < 0 || monitorIndex >= cams.Count || !cams[monitorIndex].Online)
                 {
@@ -350,13 +350,13 @@ namespace CoOpHorror.UI
             if (monitorMaterial != null)
             {
                 monitorMaterial.SetFloat(SignalId, signal);
-                monitorMaterial.SetFloat(StaticId, switching);
+                monitorMaterial.SetFloat(StaticId, Mathf.Max(switching, live ? cam.FeedStatic : 0f));
                 monitorMaterial.SetFloat(ZoomId, viewing ? zoom : 1f);
             }
             if (viewMaterial != null)
             {
                 viewMaterial.SetFloat(SignalId, signal);
-                viewMaterial.SetFloat(StaticId, switching);
+                viewMaterial.SetFloat(StaticId, Mathf.Max(switching, live ? cam.FeedStatic : 0f));
                 viewMaterial.SetFloat(ZoomId, zoom);
                 viewMaterial.SetFloat(AspectId, Screen.width / (float)Mathf.Max(1, Screen.height));
             }
@@ -476,14 +476,16 @@ namespace CoOpHorror.UI
             text.text = value;
         }
 
-        private static bool LocalAliveInShip()
+        // The ship's monitors update whenever the local view is in the ship - also a dead player's ghost camera
+        // watching a teammate there (otherwise the screen froze on the last frame seen before dying).
+        private static bool LocalViewInShip()
         {
             var me = PlayerInteractor.Local;
             if (me == null || !me.IsSpawned) return false;
-            var health = PlayerHealth.Local;
-            if (health != null && health.IsDead.Value) return false;
             var stage = StageDirector.Instance;
-            return stage == null || stage.InShip(me.transform.position);
+            var cam = Camera.main;
+            var at = cam != null ? cam.transform.position : me.transform.position;
+            return stage == null || stage.InShip(at);
         }
 
         private void UpdateOverlay(CctvCamera cam, bool live)

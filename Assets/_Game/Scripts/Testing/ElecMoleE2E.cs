@@ -17,7 +17,7 @@ namespace CoOpHorror.Testing
     // End-to-end test driver. tools/e2e-elecmole.ps1 runs the DeveloperHostClient scenario (main Editor = host,
     // "Player 2" clone = client, separate processes over Relay) and calls these entry points with
     // `unity command script eval` in each process. Each step drives the LOCAL player through the real input
-    // paths (automation hooks on PlayerInteractor / FirstPersonController / PlayerInventory): it walks along
+    // paths (automation hooks on PlayerInteractor / FirstPersonController): it walks along
     // NavMesh paths, aims, presses, holds and answers skill checks. Poll() reports progress; Snapshot()
     // prints the replicated game state for assertions. Development builds and the Editor only.
     public sealed class ElecMoleE2E : MonoBehaviour
@@ -87,9 +87,8 @@ namespace CoOpHorror.Testing
         public static string Snapshot()
         {
             var sb = new StringBuilder();
-            var grid = PowerGrid.Instance;
-            sb.Append("grid=").Append(grid != null && grid.IsSpawned ? grid.Stored.Value.ToString("0") : "-");
             var stage = StageDirector.Instance;
+            sb.Append("money=").Append(stage != null && stage.IsSpawned ? stage.Money.Value.ToString() : "-");
             sb.Append(";stage=").Append(stage != null && stage.IsSpawned ? stage.Phase.Value.ToString() : "-");
             if (stage != null && stage.IsSpawned)
             {
@@ -98,25 +97,22 @@ namespace CoOpHorror.Testing
                 sb.Append(";door=").Append(stage.ShipDoor != null && stage.ShipDoor.Open.Value ? "open" : "closed");
             }
             var tx = Transmitter.Instance;
-            if (tx != null && tx.IsSpawned) sb.Append(";tx=").Append(tx.Phase.Value).Append(";plugged=").Append(tx.PluggedCount).Append('/').Append(tx.Required);
-            var gen = Object.FindFirstObjectByType<Generator>();
-            if (gen != null) sb.Append(";genStalled=").Append(gen.IsStalled);
+            if (tx != null && tx.IsSpawned) sb.Append(";tx=").Append(tx.Phase.Value).Append(";stored=").Append(tx.StoredWatts).Append('/').Append(tx.RequiredWatts);
             sb.Append(";cctv=").Append(string.Join(",", CctvCamera.All.Where(c => c.Online).Select(c => c.Order)));
             foreach (var a in Appliance.All.Where(a => a.IsSpawned).OrderBy(a => a.NameKey))
             {
                 sb.Append(";").Append(a.NameKey.Replace("appliance.", "")).Append('=')
-                  .Append(a.IsCharged ? "C" : "c").Append(a.Charge.Value.ToString("0"))
-                  .Append(",v").Append(a.Value.Value).Append('/').Append(a.BaseValue)
-                  .Append(a.IsStored ? ",stored" : "").Append(a.IsPlugged ? ",plugged" : "").Append(a.Swallowed.Value ? ",swallowed" : "")
-                  .Append(a.IsHeld ? ",held" + a.Holders.Count : "")
-                  .Append(a.Plug != null ? ",plug" + a.Plug.State.Value : "");
+                  .Append(a.Remaining).Append('/').Append(a.Watts).Append('W')
+                  .Append(a.IsGone ? ",hidden" : "").Append(a.IsEmpty ? ",empty" : "");
             }
             foreach (var p in PlayerHealth.All.OrderBy(p => p.OwnerClientId))
-                sb.Append(";p").Append(p.OwnerClientId).Append("=hp").Append(p.Health.Value).Append(p.IsDead.Value ? ",dead" : "").Append(",rv").Append(p.ReviveCharge.Value)
+                sb.Append(";p").Append(p.OwnerClientId).Append("=hp").Append(p.Health.Value)
+                  .Append(p.IsDead.Value ? ",dead" : "").Append(",rv").Append(p.ReviveCharge.Value)
                   .Append(stage != null && stage.InShip(p.transform.position) ? ",ship" : "")
-                  .Append(p.TryGetComponent<FirstPersonController>(out var fpc) && fpc.IsTucked() ? ",tucked" : "");
+                  .Append(p.TryGetComponent<FirstPersonController>(out var fpc) && fpc.IsTucked() ? ",tucked" : "")
+                  .Append(",tank").Append(p.TryGetComponent<PlayerNose>(out var tank) ? tank.Energy.Value.ToString("0") : "-");
             sb.Append(";lamps=").Append(InstalledDevice.Devices.Count(d => d is PowerLamp && d.Online));
-            sb.Append(";ripped=").Append(InstalledDevice.Devices.Count(d => d.IsSpawned && d.Detached.Value));
+            sb.Append(";drained=").Append(InstalledDevice.Devices.Count(d => d.IsSpawned && !d.Online));
             sb.Append(";corpses=").Append(Corpse.Bodies.Count(c => c != null && c.IsSpawned));
             foreach (var c in Corpse.Bodies.Where(c => c != null && c.IsSpawned))
                 sb.Append(";corpse").Append(c.PlayerClientId.Value).Append(stage != null && stage.InShip(c.transform.position) ? "=ship" : "=out").Append(c.IsHeld ? ",held" : "");
@@ -141,17 +137,16 @@ namespace CoOpHorror.Testing
             IEnumerator body = step switch
             {
                 "setup" => Setup(),
-                "crank" => Crank(float.Parse(arg)),
-                "crank-hold" => CrankHold(true),
-                "crank-stop" => CrankHold(false),
-                "skill-wait" => SkillWait(),
-                "noise-test" => NoiseTest(),
+                "relight-lamp" => RelightLamp(),
+                "tx-cheat" => TransmitterCheat(int.Parse(arg)),
                 "door" => OpenDoor(),
                 "power-cctv" => PowerCctv(int.Parse(arg)),
+                "cctv-live" => CctvLiveCheat(int.Parse(arg)),
+                "drain-cctv" => DrainCctv(int.Parse(arg)),
                 "cctv-view" => CctvOpen(int.Parse(arg)),
                 "cctv-exit" => CctvClose(),
-                "activate-tx" => ActivateTransmitter(),
-                "deliver" => Deliver(arg),
+                "suck" => Suck(arg),
+                "inject" => Inject(),
                 "walk" => WalkStep(arg),
                 "kill" => Kill(ulong.Parse(arg)),
                 "revive-hit" => ReviveByHitting(ulong.Parse(arg)),
@@ -161,8 +156,7 @@ namespace CoOpHorror.Testing
                 "radio" => Radio(arg),
                 "spectate-check" => SpectateCheck(),
                 "outside" => Outside(),
-                "power-lamp" => PowerLamp(),
-                "rip-cctv" => RipCctv(int.Parse(arg)),
+                "drain-lamp" => DrainLamp(),
                 "hide" => Hide(),
                 _ => Unknown(step),
             };
@@ -203,109 +197,18 @@ namespace CoOpHorror.Testing
             message = "player " + Me.OwnerClientId + (NetworkManager.Singleton.IsServer ? " (host, monster frozen)" : " (client)");
         }
 
-        private IEnumerator Crank(float amount)
-        {
-            var gen = Object.FindFirstObjectByType<Generator>();
-            yield return WalkNear(gen, 1.3f);
-            var seen = Me.SkillChecksSeen;
-            yield return HoldUntil(gen, () => PowerGrid.Instance.Stored.Value >= amount, 90f, "grid >= " + amount);
-            message = $"grid={PowerGrid.Instance.Stored.Value:0} skillChecks={Me.SkillChecksSeen - seen} missed={Me.SkillChecksMissed}";
-        }
-
-        // Keep cranking in the background while other steps (on the client) use power.
-        private IEnumerator CrankHold(bool on)
-        {
-            var gen = Object.FindFirstObjectByType<Generator>();
-            if (on)
-            {
-                yield return WalkNear(gen, 1.3f);
-                yield return Face(gen);
-                keepHolding = true;
-                StartCoroutine(KeepCranking(gen));
-                message = "cranking";
-            }
-            else
-            {
-                keepHolding = false;
-                Me.AutomationHold = false;
-                Me.AutomationTarget = null;
-                message = "stopped at grid " + PowerGrid.Instance.Stored.Value.ToString("0");
-            }
-        }
-
-        private static bool keepHolding;
-
-        // Crank from a nearly empty grid until a skill check is on screen (left running for a screenshot).
-        private IEnumerator SkillWait()
-        {
-            var gen = Object.FindFirstObjectByType<Generator>();
-            PowerGrid.Instance.ServerTake(Mathf.Max(0f, PowerGrid.Instance.Stored.Value - 5f));
-            yield return WalkNear(gen, 1.3f);
-            yield return Face(gen);
-            keepHolding = true;
-            StartCoroutine(KeepCranking(gen));
-            var until = Time.time + 20f;
-            while (!Me.Check.Visible && Time.time < until) yield return null;
-            if (!Me.Check.Visible) { Fail("no skill check within 20 s"); yield break; }
-            yield return new WaitForSeconds(0.5f);
-            message = "skill check on screen (" + Me.Check.Current + ")";
-        }
-
-        // Background: the hold ends whenever the grid is full; start it again once power is used.
-        private IEnumerator KeepCranking(Generator gen)
-        {
-            while (keepHolding && Me != null)
-            {
-                Me.AutomationTarget = gen;
-                if (!Me.HoldingUse && PowerGrid.Instance.Stored.Value < PowerGrid.Capacity - 3f)
-                {
-                    Me.AutomationHold = false;
-                    yield return null;
-                    Me.AutomationHold = true;
-                }
-                else Me.AutomationHold = true;
-                yield return new WaitForSeconds(0.25f);
-            }
-        }
-
-        // A missed skill check must stall the generator and bring a nearby monster to look.
-        private IEnumerator NoiseTest()
-        {
-            var gen = Object.FindFirstObjectByType<Generator>();
-            var monster = TempMonster.Instance;
-            var home = monster.transform.position;
-            monster.ServerTeleport(gen.transform.position + (StageDirector.Instance.ShipDoor.transform.position - gen.transform.position).normalized * 9f);
-            // Room for cranking: a full grid ends the hold before a check appears.
-            PowerGrid.Instance.ServerTake(Mathf.Max(0f, PowerGrid.Instance.Stored.Value - 10f));
-            yield return WalkNear(gen, 1.3f);
-            yield return Face(gen);
-            var missed = Me.SkillChecksMissed;
-            Me.AutomationSkill = PlayerInteractor.SkillAutomation.Miss;
-            Me.AutomationTarget = gen;
-            Me.AutomationHold = true;
-            var until = Time.time + 25f;
-            while (Me.SkillChecksMissed == missed && Time.time < until)
-            {
-                if (!Me.HoldingUse) { Me.AutomationHold = false; yield return null; Me.AutomationHold = true; }
-                yield return null;
-            }
-            Me.AutomationSkill = PlayerInteractor.SkillAutomation.Perfect;
-            if (Me.SkillChecksMissed == missed) { Fail("no skill check appeared to miss"); yield break; }
-            yield return new WaitForSeconds(0.4f);
-            var stalled = gen.IsStalled;
-            var investigating = monster.Investigating;
-            Me.AutomationHold = false;
-            monster.ServerTeleport(home);
-            if (!stalled || !investigating) { Fail($"after miss: stalled={stalled} monsterInvestigating={investigating}"); yield break; }
-            message = "miss -> generator stalled, monster 11m away came to investigate";
-        }
-
         private IEnumerator OpenDoor()
         {
             var door = StageDirector.Instance.ShipDoor;
             yield return WalkTo(door.transform.position + new Vector3(-1.6f, 0f, 0f), 0.4f);
             yield return Face(door.Panel.position);
-            yield return HoldUntil(door, () => door.Open.Value, 20f, "door open");
+            // the door opens with a click, no power needed
+            Me.AutomationTarget = door;
+            Me.AutomationPress();
+            var until = Time.time + 5f;
+            while (!door.Open.Value && Time.time < until) yield return null;
+            Me.AutomationTarget = null;
+            if (!door.Open.Value) { Fail("door did not open"); yield break; }
             message = "ship door open";
         }
 
@@ -314,7 +217,8 @@ namespace CoOpHorror.Testing
             var cam = CctvCamera.All.First(c => c.Order == number);
             yield return WalkTo(cam.transform.position + cam.transform.forward * 1.3f, 0.4f);
             yield return Face(cam.transform.position + Vector3.up * 1.3f + cam.transform.forward * 0.1f);
-            yield return HoldUntil(cam, () => cam.Online, 30f, "cctv online");
+            // only CctvCamera.LiveAtStart random cameras are on at the start (the run forces this one with cctv-live)
+            if (!cam.Online) { Fail("CAM " + number + " is not on"); yield break; }
             message = "CAM " + number + " online";
         }
 
@@ -341,92 +245,36 @@ namespace CoOpHorror.Testing
             message = "closed";
         }
 
-        private IEnumerator ActivateTransmitter()
+        // Drink an appliance dry with the nose (or until the tank is full). arg = the appliance name's end, e.g. "Kettle".
+        private IEnumerator Suck(string name)
+        {
+            var appliance = Appliance.All.First(a => a.name.EndsWith(name, StringComparison.OrdinalIgnoreCase));
+            var nose = Me.GetComponent<PlayerNose>();
+            var before = nose.Energy.Value;
+            yield return WalkNear(appliance, 0.9f);
+            yield return Face(appliance.NosePoint(Me.EyePosition));
+            yield return HoldUntil(appliance, () => appliance.IsEmpty, 60f, appliance.name + " drained");
+            yield return new WaitForSeconds(0.3f);
+            message = $"{appliance.name}: {appliance.Remaining}/{appliance.Watts}W left, tank {before:0} -> {nose.Energy.Value:0}W";
+        }
+
+        // Pump the whole tank into the ship's transmitter (right button).
+        private IEnumerator Inject()
         {
             var tx = Transmitter.Instance;
-            yield return WalkTo(TransmitterStand(), 0.4f);
-            yield return Face(tx.transform.position + Vector3.up * 1.3f);
-            yield return HoldUntil(tx, () => tx.Phase.Value != TransmitterPhase.Dormant, 60f, "transmitter active");
-            message = "transmitter " + tx.Phase.Value;
+            var nose = Me.GetComponent<PlayerNose>();
+            var before = tx.StoredWatts;
+            yield return WalkTo(TransmitterStand(), 0.35f);
+            yield return Face(tx.NosePoint(Me.EyePosition));
+            yield return HoldUntilRight(tx, () => nose.Energy.Value < 1f, 30f, "tank emptied into the transmitter");
+            yield return new WaitForSeconds(0.3f);
+            message = $"transmitter {before} -> {tx.StoredWatts}/{tx.RequiredWatts}W ({tx.Phase.Value}), tank {nose.Energy.Value:0}W";
         }
 
         private static Vector3 TransmitterStand()
         {
             var tx = Transmitter.Instance.transform;
-            return tx.position + tx.forward * 2.3f;
-        }
-
-        // arg = "Fan:carry" | "Radio:drag" | "Toaster:inventory"
-        //   carry: telekinesis to the transmitter, then plug. drag: carry it to cord length + 3 m away in the
-        //   transmitter's room, then walk the plug over so the cord drags it (value loss). inventory: store it,
-        //   walk across the map, take it out, drop it, plug.
-        private IEnumerator Deliver(string arg)
-        {
-            var parts = arg.Split(':');
-            var appliance = Appliance.All.First(a => a.name.EndsWith(parts[0], StringComparison.OrdinalIgnoreCase));
-            var mode = parts.Length > 1 ? parts[1] : "carry";
-            var tx = Transmitter.Instance;
-
-            yield return WalkNear(appliance, 1.2f);
-            yield return Face(appliance.transform.position + Vector3.up * 0.25f);
-            if (!appliance.IsCharged)
-                yield return HoldUntil(appliance, () => appliance.IsCharged, 60f, appliance.name + " charged");
-            if (state != "running") yield break;
-            var before = appliance.Value.Value;
-
-            if (mode == "carry" || mode == "drag")
-            {
-                var away = Flat(TransmitterStand() - tx.transform.position).normalized;
-                var goal = mode == "drag" ? TransmitterStand() + away * (appliance.CordLength + 3f) : TransmitterStand() + Vector3.right * 0.8f;
-                yield return CarryTo(appliance, goal);
-                if (state != "running") yield break;
-            }
-            if (mode == "inventory")
-            {
-                Me.AutomationHold = false;
-                yield return null;
-                yield return Face(appliance.transform.position + Vector3.up * 0.25f);
-                Me.AutomationTarget = appliance;
-                Me.AutomationHold = true;
-                var until = Time.time + 5f;
-                while (!appliance.HeldBy(Me) && Time.time < until) yield return null;
-                if (!appliance.HeldBy(Me)) { Fail("could not lift " + appliance.name); yield break; }
-                Me.AutomationTarget = null;
-                Me.GetComponent<PlayerInventory>().UseSlot(0);
-                until = Time.time + 3f;
-                while (!appliance.IsStored && Time.time < until) yield return null;
-                if (!appliance.IsStored) { Fail("could not store " + appliance.name); yield break; }
-                Me.AutomationHold = false;
-                Write("stored " + appliance.name + " in slot 1");
-                yield return WalkTo(TransmitterStand() + Vector3.right * 0.8f, 0.5f);
-                Me.GetComponent<PlayerInventory>().UseSlot(0);
-                until = Time.time + 3f;
-                while (!appliance.HeldBy(Me) && Time.time < until) yield return null;
-                if (!appliance.HeldBy(Me)) { Fail("could not take " + appliance.name + " out"); yield break; }
-                yield return new WaitForSeconds(0.6f);
-                Me.AutomationDrop();
-                yield return new WaitForSeconds(1.2f);
-            }
-
-            // Plug: take it, walk the cord to the transmitter, plug it in.
-            var plug = appliance.Plug;
-            yield return WalkTo(plug.transform.position + (Me.transform.position - plug.transform.position).normalized * 1.1f, 0.4f);
-            yield return Face(plug.transform.position);
-            Me.AutomationTarget = plug;
-            Me.AutomationPress();
-            var deadline = Time.time + 3f;
-            while (!plug.HeldBy(Me) && Time.time < deadline) yield return null;
-            Me.AutomationTarget = null;
-            if (!plug.HeldBy(Me)) { Fail("could not take the plug of " + appliance.name); yield break; }
-            yield return WalkTo(TransmitterStand(), 0.4f);
-            yield return Face(tx.transform.position + Vector3.up * 1.0f);
-            Me.AutomationTarget = tx;
-            Me.AutomationPress();
-            deadline = Time.time + 3f;
-            while (!plug.IsSocketed && Time.time < deadline) yield return null;
-            Me.AutomationTarget = null;
-            if (!plug.IsSocketed) { Fail("could not plug " + appliance.name + " (" + plug.State.Value + ")"); yield break; }
-            message = $"{appliance.name} plugged via {mode}, value {before} -> {appliance.Value.Value}, sockets {tx.PluggedCount}/{tx.Required}";
+            return tx.position + tx.forward * 1.4f;
         }
 
         // Just outside the ship's door.
@@ -438,27 +286,57 @@ namespace CoOpHorror.Testing
             message = "outside at " + Me.transform.position.ToString("F1");
         }
 
-        // Charge the nearest ceiling lamp.
-        private IEnumerator PowerLamp()
+        // Drink the nearest ceiling lamp dark.
+        private IEnumerator DrainLamp()
         {
-            var lamp = InstalledDevice.Devices.OfType<PowerLamp>().OrderBy(l => (l.transform.position - Me.transform.position).sqrMagnitude).First();
+            var lamp = InstalledDevice.Devices.OfType<PowerLamp>().Where(l => l.Online).OrderBy(l => (l.transform.position - Me.transform.position).sqrMagnitude).First();
+            var nose = Me.GetComponent<PlayerNose>();
             yield return WalkTo(new Vector3(lamp.transform.position.x + 0.6f, 0f, lamp.transform.position.z), 0.3f);
-            yield return Face(lamp.transform.position);
-            yield return HoldUntil(lamp, () => lamp.Online, 30f, "lamp on");
-            message = lamp.name + " lit";
+            yield return Face(lamp.NosePoint(Me.EyePosition));
+            yield return HoldUntil(lamp, () => !lamp.Online, 30f, "lamp drained");
+            message = $"{lamp.name} drained (online={lamp.Online}), tank {nose.Energy.Value:0}W";
         }
 
-        // Rip a powered CCTV camera off its mount: it goes dark and drops sellable salvage.
-        private IEnumerator RipCctv(int number)
+        // Right button: pump the tank back into the nearest dark lamp until it is fully lit again.
+        private IEnumerator RelightLamp()
+        {
+            var lamp = InstalledDevice.Devices.OfType<PowerLamp>().Where(l => l.Power.Value < l.Watts - 0.5f).OrderBy(l => (l.transform.position - Me.transform.position).sqrMagnitude).First();
+            var nose = Me.GetComponent<PlayerNose>();
+            yield return WalkTo(new Vector3(lamp.transform.position.x + 0.6f, 0f, lamp.transform.position.z), 0.3f);
+            yield return Face(lamp.NosePoint(Me.EyePosition));
+            yield return HoldUntilRight(lamp, () => lamp.Power.Value >= lamp.Watts - 0.5f || nose.Energy.Value < 1f, 30f, "lamp relit");
+            message = $"{lamp.name} relit ({lamp.Remaining}/{lamp.Watts}W), tank {nose.Energy.Value:0}W";
+        }
+
+        // Host: fill the transmitter to `watts` so the run gets to the blackout without many trips.
+        private IEnumerator TransmitterCheat(int watts)
+        {
+            var tx = Transmitter.Instance;
+            if (!NetworkManager.Singleton.IsServer || tx == null) { Fail("host only"); yield break; }
+            tx.Stored.Value = Mathf.Min(watts, tx.RequiredWatts - 1);
+            yield return null;
+            message = $"transmitter set to {tx.StoredWatts}/{tx.RequiredWatts}W";
+        }
+
+        // Host: power a camera so the run does not depend on the random start pick.
+        private IEnumerator CctvLiveCheat(int number)
         {
             var cam = CctvCamera.All.First(c => c.Order == number);
+            if (!NetworkManager.Singleton.IsServer) { Fail("host only"); yield break; }
+            cam.Power.Value = cam.Watts;
+            yield return null;
+            message = "CAM " + number + " forced live";
+        }
+
+        // Drink a CCTV camera dry: its feed fills with static and dies.
+        private IEnumerator DrainCctv(int number)
+        {
+            var cam = CctvCamera.All.First(c => c.Order == number);
+            var nose = Me.GetComponent<PlayerNose>();
             yield return WalkTo(cam.transform.position + cam.transform.forward * 1.3f, 0.4f);
-            yield return Face(cam.transform.position + Vector3.up * 1.3f + cam.transform.forward * 0.1f);
-            yield return HoldUntil(cam, () => cam.Detached.Value, 20f, "camera ripped off");
-            if (state != "running") yield break;
-            yield return new WaitForSeconds(1.5f);
-            if (cam.Salvage == null || !cam.Salvage.Revealed.Value) { Fail("no salvage dropped"); yield break; }
-            message = $"CAM {number} ripped off (online={cam.Online}), salvage {cam.Salvage.name} value {cam.Salvage.Value.Value}";
+            yield return Face(cam.NosePoint(Me.EyePosition));
+            yield return HoldUntil(cam, () => !cam.Online, 30f, "camera drained");
+            message = $"CAM {number} drained (online={cam.Online}), tank {nose.Energy.Value:0}W";
         }
 
         // Squeeze under the nearest desk (Ctrl): the host must see the player as tucked.
@@ -491,31 +369,6 @@ namespace CoOpHorror.Testing
             if (Motor == null) return "no motor";
             Motor.AutomationCrouch = false;
             return "standing";
-        }
-
-        // Telekinesis-carry an appliance to a point; if it snags on a door frame and drops, pick it up again.
-        private IEnumerator CarryTo(Appliance appliance, Vector3 goal)
-        {
-            for (var attempt = 0; attempt < 4 && Flat(appliance.transform.position - goal).magnitude > 3f; attempt++)
-            {
-                if (attempt > 0) Write($"re-grabbing {appliance.name} (attempt {attempt + 1})");
-                Me.AutomationHold = false;
-                yield return WalkNear(appliance, 1.0f);
-                yield return Face(appliance.transform.position + Vector3.up * 0.25f);
-                yield return null;
-                Me.AutomationTarget = appliance;
-                Me.AutomationHold = true;
-                var until = Time.time + 5f;
-                while (!appliance.HeldBy(Me) && Time.time < until) yield return null;
-                Me.AutomationTarget = null;
-                if (!appliance.HeldBy(Me)) continue;
-                walkPitch = 20f;
-                yield return WalkTo(goal, 0.5f, 75f, () => !appliance.HeldBy(Me));
-                walkPitch = 5f;
-                Me.AutomationHold = false;
-                yield return new WaitForSeconds(1.2f);
-            }
-            if (Flat(appliance.transform.position - goal).magnitude > 3.5f) Fail($"could not carry {appliance.name} to {goal:F1} (at {appliance.transform.position:F1})");
         }
 
         private IEnumerator WalkStep(string arg)
@@ -686,6 +539,31 @@ namespace CoOpHorror.Testing
         }
 
         // Holds the button on a target until done; re-presses when the hold dropped (e.g. grid ran dry).
+        // Same with the right button (the nose pumps out).
+        private IEnumerator HoldUntilRight(Interactable target, Func<bool> done, float timeout, string what)
+        {
+            Me.AutomationTarget = target;
+            Me.AutomationHoldRight = true;
+            var deadline = Time.time + timeout;
+            var notHolding = 0f;
+            while (!done())
+            {
+                if (Time.time > deadline) { Fail("timeout waiting for " + what); break; }
+                notHolding = Me.HoldingUse ? 0f : notHolding + Time.deltaTime;
+                if (notHolding > 0.6f)
+                {
+                    Me.AutomationHoldRight = false;
+                    yield return null;
+                    Me.AutomationHoldRight = true;
+                    notHolding = 0f;
+                }
+                yield return null;
+            }
+            Me.AutomationHoldRight = false;
+            Me.AutomationTarget = null;
+            yield return null;
+        }
+
         private IEnumerator HoldUntil(Interactable target, Func<bool> done, float timeout, string what)
         {
             Me.AutomationTarget = target;
@@ -715,8 +593,9 @@ namespace CoOpHorror.Testing
         private void Release()
         {
             if (Motor != null) Motor.AutomationMove = Vector2.zero;
-            if (Me == null || keepHolding) return;
+            if (Me == null) return;
             Me.AutomationHold = false;
+            Me.AutomationHoldRight = false;
             Me.AutomationTarget = null;
         }
 

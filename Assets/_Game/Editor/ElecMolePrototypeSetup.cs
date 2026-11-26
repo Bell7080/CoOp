@@ -104,8 +104,8 @@ namespace CoOpHorror.Editor
             return component;
         }
 
-        // Player prefab: the squishy mole alien, left-click interaction and telekinesis, flashlight,
-        // inventory, radio, and the body it leaves when it dies.
+        // Player prefab: the squishy mole alien, left-click interaction, the long nose and its energy tank,
+        // flashlight, radio, and the body it leaves when it dies.
         private static void ConfigurePlayerPrefab(GameObject corpse)
         {
             var root = PrefabUtility.LoadPrefabContents(PlayerPrefabPath);
@@ -114,7 +114,7 @@ namespace CoOpHorror.Editor
                 GameObjectUtility.RemoveMonoBehavioursWithMissingScript(root); // removed PlayerCombat / PlayerCorpse
                 if (root.GetComponent<PlayerInteractor>() == null) root.AddComponent<PlayerInteractor>();
                 if (root.GetComponent<PlayerFlashlight>() == null) root.AddComponent<PlayerFlashlight>();
-                if (root.GetComponent<PlayerInventory>() == null) root.AddComponent<PlayerInventory>();
+                if (root.GetComponent<PlayerNose>() == null) root.AddComponent<PlayerNose>();
                 if (root.GetComponent<PlayerRadio>() == null) root.AddComponent<PlayerRadio>();
                 if (root.GetComponent<PlayerReviver>() == null) root.AddComponent<PlayerReviver>();
                 root.GetComponent<PlayerHealth>().CorpsePrefab = corpse;
@@ -151,7 +151,7 @@ namespace CoOpHorror.Editor
                     mole.transform.SetParent(root.transform, false);
                     mole.transform.localPosition = new Vector3(0f, 0.02f, 0f);
                     mole.transform.localRotation = Quaternion.Euler(0f, 25f, 0f);
-                    mole.transform.localScale = new Vector3(1.35f, 0.24f, 1.25f);
+                    mole.transform.localScale = new Vector3(1.25f, 0.42f, 1.2f); // Corpse flops it from here
                     var animator = mole.GetComponent<Animator>();
                     if (animator != null) Object.DestroyImmediate(animator);
                     var material = CharacterMaterial("MoleAlien", Color.white);
@@ -161,7 +161,9 @@ namespace CoOpHorror.Editor
                         if (r.name == "MoleAlien") corpse.BodyRenderer = r;
                         if (r.name == "MoleNose") corpse.HeadRenderer = r;
                     }
-                    Dress(root.transform, "QuaterniusZombie/Blood_1", new Vector3(0f, 0.012f, 0f), new Vector3(2.3f, 0.01f, 2.3f), 40f, true);
+                    corpse.Model = mole.transform;
+                    // the pool: Corpse keeps it on the floor where the player fell while the body is carried off
+                    corpse.Blood = Dress(root.transform, "QuaterniusZombie/Blood_1", new Vector3(0f, 0.012f, 0f), new Vector3(2.3f, 0.01f, 2.3f), 40f, true);
                 }
                 else
                 {
@@ -227,7 +229,7 @@ namespace CoOpHorror.Editor
                 light.shadows = LightShadows.None;
             }
             RenderSettings.ambientMode = AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.16f, 0.163f, 0.18f); // with the PS1 shadow lift: rooms read dimly without a lamp
+            RenderSettings.ambientLight = new Color(0.12f, 0.122f, 0.135f); // darker: rooms read only faintly without a lamp
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.ExponentialSquared;
             RenderSettings.fogDensity = 0.028f; // darkness closes in: ~60% at 10 m, ~10% at 20 m
@@ -256,28 +258,30 @@ namespace CoOpHorror.Editor
 
         private static void BuildGameplay(Light sun, Light[] emergencyLights)
         {
-            NetRoot("PowerGrid", Vector3.zero, 0f).AddComponent<PowerGrid>();
-            BuildGenerator(Ship.Generator, 0f);
-            var door = BuildPoweredDoor("ShipDoor", Ship.Door, 0f, 8f);
+            // (no shared power grid and no generator any more: its crank handle lies somewhere out in the map)
+            BuildCrankItem(OnStand("Crank", CrankPosition, 30f, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f)), 30f);
+            var door = BuildPoweredDoor("ShipDoor", Ship.Door, 0f);
             BuildLaunchButton(Ship.Launch, 135f);
             BuildSupply();
             BuildCctvPanel(Ship.Panel, 0f);
             BuildShipMic(Ship.Panel + new Vector3(-0.35f, 0.86f, 0.32f)); // on the desk top, front right of the monitor
-            BuildTransmitter(TransmitterPosition, 0f);
+            BuildTransmitter(Ship.Transmitter, 180f);
 
-            // name, text key, power, value, weight (holders to lift), tiny (inventory), cord length.
-            BuildAppliance("TV", "appliance.tv", 40f, 400, 2, false, 6f, new Vector3(-30f, 0f, 6f), 90f, Mat("ApplianceDark", new Color(0.12f, 0.12f, 0.13f)),
+            // name, text key, watts it holds (every nose drinks at the same flat rate).
+            // appliances stand on furniture (a dresser, side tables, a kitchen cabinet), never on the bare floor;
+            // the microwave, toaster and kettle are already on the break room counter
+            BuildAppliance("TV", "appliance.tv", 120, OnStand("TV", new Vector3(-30f, 0f, 6f), 90f, "QuaterniusHouse/Drawer_3", new Vector3(0.95f, 0.62f, 0.52f)), 90f, Mat("ApplianceDark", new Color(0.12f, 0.12f, 0.13f)),
                 new Vector3(0f, 0.3f, 0f), new Vector3(0.75f, 0.55f, 0.45f), new Vector3(0f, 0.31f, 0.231f), new Vector3(0.6f, 0.42f, 0.02f));
-            BuildAppliance("Microwave", "appliance.microwave", 30f, 300, 2, false, 6f, new Vector3(14.2f, 0.95f, 9.15f), 180f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
+            BuildAppliance("Microwave", "appliance.microwave", 1000, new Vector3(14.2f, 0.95f, 9.15f), 180f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
                 new Vector3(0f, 0.17f, 0f), new Vector3(0.55f, 0.34f, 0.4f), new Vector3(-0.06f, 0.17f, 0.205f), new Vector3(0.32f, 0.22f, 0.02f));
-            BuildAppliance("Radio", "appliance.radio", 20f, 150, 1, true, 5f, new Vector3(-22f, 0f, 25f), 180f, Mat("ApplianceWood", new Color(0.42f, 0.27f, 0.15f)),
+            BuildAppliance("Radio", "appliance.radio", 30, OnStand("Radio", new Vector3(-22f, 0f, 25f), 180f, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f)), 180f, Mat("ApplianceWood", new Color(0.42f, 0.27f, 0.15f)),
                 new Vector3(0f, 0.13f, 0f), new Vector3(0.45f, 0.26f, 0.15f), new Vector3(0f, 0.2f, 0.08f), new Vector3(0.35f, 0.06f, 0.02f));
-            BuildFan(new Vector3(-9f, 0f, 6f), 180f);
-            BuildAppliance("Toaster", "appliance.toaster", 15f, 120, 1, true, 4.5f, new Vector3(12.2f, 0.95f, 9.15f), 180f, Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f)),
+            BuildFan(OnStand("Fan", new Vector3(-9f, 0f, 6f), 180f, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f)), 180f, 0.55f); // a desk fan on a side table
+            BuildAppliance("Toaster", "appliance.toaster", 800, new Vector3(12.2f, 0.95f, 9.15f), 180f, Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f)),
                 new Vector3(0f, 0.11f, 0f), new Vector3(0.3f, 0.22f, 0.18f), new Vector3(0f, 0.11f, 0.095f), new Vector3(0.18f, 0.08f, 0.01f));
-            BuildAppliance("Kettle", "appliance.kettle", 15f, 160, 1, true, 4f, new Vector3(16.2f, 0.95f, 9.15f), 180f, Mat("ApplianceRed", new Color(0.55f, 0.12f, 0.1f)),
+            BuildAppliance("Kettle", "appliance.kettle", 1500, new Vector3(16.2f, 0.95f, 9.15f), 180f, Mat("ApplianceRed", new Color(0.55f, 0.12f, 0.1f)),
                 new Vector3(0f, 0.14f, 0f), new Vector3(0.22f, 0.28f, 0.22f), new Vector3(0f, 0.2f, 0.115f), new Vector3(0.08f, 0.05f, 0.01f));
-            BuildAppliance("RiceCooker", "appliance.ricecooker", 25f, 220, 1, false, 5f, new Vector3(12f, 0f, -19.6f), 0f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
+            BuildAppliance("RiceCooker", "appliance.ricecooker", 650, OnStand("RiceCooker", new Vector3(12f, 0f, -19.6f), 0f, "KenneyFurniture/kitchenCabinet", new Vector3(0.7f, 0.9f, 0.6f)), 0f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
                 new Vector3(0f, 0.17f, 0f), new Vector3(0.38f, 0.34f, 0.38f), new Vector3(0f, 0.2f, 0.195f), new Vector3(0.16f, 0.06f, 0.01f));
 
             // CCTV cameras on room walls (root on the wall face, facing into the room) and ceiling lamps.
@@ -285,7 +289,7 @@ namespace CoOpHorror.Editor
             var lampIndex = 0;
             foreach (var room in Rooms)
                 if (room.Kind != RoomKind.Ship)
-                    foreach (var spot in LampSpots(room)) BuildLamp(++lampIndex, spot + Vector3.up * 3.1f);
+                    foreach (var spot in LampSpots(room)) BuildLamp(++lampIndex, spot + Vector3.up * LampHeight);
 
             BuildCreatures();
             BuildSwingDoors();
@@ -303,58 +307,40 @@ namespace CoOpHorror.Editor
             director.ShipDoor = door;
         }
 
-        private static void BuildGenerator(Vector3 position, float yaw)
+        // Where the ship's generator crank handle ended up: on a side table in the old transmitter room.
+        private static readonly Vector3 CrankPosition = new(31f, 0f, 23f);
+
+        // The generator's hand crank (tools/blender/make_crank.py), lying on a table: a map item that only says
+        // what it is for now. It does not turn.
+        private static void BuildCrankItem(Vector3 position, float yaw)
         {
-            var root = NetRoot("Generator", position, yaw);
-            var body = Mat("Generator", new Color(0.45f, 0.3f, 0.12f), tex: Texture("Rust"), tiling: 1f);
-            var dark = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
-            Box(root.transform, "Base", new Vector3(0f, 0.6f, 0f), new Vector3(1.6f, 1.2f, 1.1f), body);
-            Shape(root.transform, "Exhaust", PrimitiveType.Cylinder, new Vector3(-0.5f, 1.4f, 0.3f), Vector3.zero, new Vector3(0.15f, 0.4f, 0.15f), dark);
-            Shape(root.transform, "Stripe", PrimitiveType.Cube, new Vector3(0f, 1.05f, 0.56f), Vector3.zero, new Vector3(1.5f, 0.12f, 0.01f), Mat("Hazard", Color.white, tex: Texture("Hazard"), tiling: 4f));
-            var rotor = new GameObject("Rotor").transform;
-            rotor.SetParent(root.transform, false);
-            rotor.localPosition = new Vector3(0.86f, 0.7f, 0f);
-            Shape(rotor, "Wheel", PrimitiveType.Cylinder, Vector3.zero, new Vector3(0f, 0f, 90f), new Vector3(0.8f, 0.05f, 0.8f), dark);
-            Shape(rotor, "Handle", PrimitiveType.Cube, new Vector3(0.08f, 0.3f, 0f), Vector3.zero, new Vector3(0.08f, 0.22f, 0.08f), body);
-            var lamp = PointLight(root.transform, "Lamp", new Vector3(0f, 1.9f, 0.4f), new Color(1f, 0.65f, 0.25f), 2.5f, 6f);
-            Obstacle(root, new Vector3(0f, 0.6f, 0f), new Vector3(1.6f, 1.2f, 1.1f));
-            // The ship's core engine (Tripo): reactor window facing the cabin (+X), the hand crank on its side
-            // (+Z) turning about the side axis. Primitives stay as the collider.
-            Transform engine = null;
-            if (PropModel(ShipProp("ShipCoreEngine")) != null)
+            var root = NetRoot("Item_Crank", position, yaw);
+            var collider = root.AddComponent<BoxCollider>();
+            collider.center = new Vector3(0f, 0.06f, 0f);
+            collider.size = new Vector3(0.45f, 0.12f, 0.3f);
+            var crank = PropModel(ShipProp("ShipCrank"));
+            if (crank != null)
             {
-                engine = Dress(root.transform, ShipProp("ShipCoreEngine"), Vector3.zero, new Vector3(1.5f, 1.9f, 1.5f), 90f, true);
-                HideRenderers(root.transform, "Base", "Exhaust", "Stripe", "Wheel", "Handle");
-                root.transform.Find("Base").localScale = new Vector3(1.5f, 1.3f, 1.5f);
-                root.transform.Find("Base").localPosition = new Vector3(0f, 0.65f, 0f);
-                rotor.localPosition = new Vector3(0f, 0.85f, 0.84f);
-                rotor.localRotation = Quaternion.Euler(0f, 90f, 0f); // its local X (the spin axis) now points sideways
-                var crank = PropModel(ShipProp("ShipCrank"));
-                if (crank != null)
+                var c = (GameObject)PrefabUtility.InstantiatePrefab(crank);
+                c.transform.SetParent(root.transform, false);
+                c.transform.localPosition = new Vector3(0f, 0.04f, 0f);
+                c.transform.localRotation = Quaternion.Euler(0f, 0f, 90f); // lying on its side
+                foreach (var r in c.GetComponentsInChildren<Renderer>())
                 {
-                    var c = (GameObject)PrefabUtility.InstantiatePrefab(crank);
-                    c.transform.SetParent(rotor, false);
-                    c.transform.localScale = Vector3.one * 1.1f;
-                    foreach (var r in c.GetComponentsInChildren<Renderer>())
-                    {
-                        var mats = r.sharedMaterials;
-                        for (var i = 0; i < mats.Length; i++) mats[i] = PropMaterial(ShipProp("ShipCrank"), mats[i]);
-                        r.sharedMaterials = mats;
-                    }
-                    c.name = "Model_ShipCrank";
+                    var mats = r.sharedMaterials;
+                    for (var i = 0; i < mats.Length; i++) mats[i] = PropMaterial(ShipProp("ShipCrank"), mats[i]);
+                    r.sharedMaterials = mats;
                 }
-                lamp.transform.localPosition = new Vector3(1.1f, 1.2f, 0f); // glow in front of the reactor window
+                c.name = "Model_ShipCrank";
             }
-            else if (Dress(root.transform, ShipProp("ShipGenerator"), Vector3.zero, new Vector3(1.1f, 1.5f, 1.6f), 90f, true) != null)
-                HideRenderers(root.transform, "Base", "Exhaust", "Stripe", "Wheel", "Handle");
-            var generator = root.AddComponent<Generator>();
-            generator.Rotor = rotor;
-            generator.Lamp = lamp;
-            generator.Body = engine;
+            else Shape(root.transform, "Handle", PrimitiveType.Cube, new Vector3(0f, 0.05f, 0f), Vector3.zero, new Vector3(0.4f, 0.08f, 0.08f), Mat("Generator", new Color(0.45f, 0.3f, 0.12f)));
+            var item = root.AddComponent<MapItem>();
+            item.NameKey = "item.crank";
+            item.InfoKey = "item.crankInfo";
         }
 
         // Door along the Z axis (the wall runs north-south); the panel slides up when powered.
-        private static PoweredDoor BuildPoweredDoor(string name, Vector3 position, float yaw, float capacity)
+        private static PoweredDoor BuildPoweredDoor(string name, Vector3 position, float yaw)
         {
             var root = NetRoot(name, position, yaw);
             var panelMat = Mat("DoorPanel", new Color(0.42f, 0.44f, 0.42f), tex: Texture("Metal"), tiling: 1f);
@@ -377,7 +363,6 @@ namespace CoOpHorror.Editor
             var inside = Button("ButtonInside", -0.3f, DoorWidth / 2f + 0.35f);
             var outside = Button("ButtonOutside", 0.34f, -(DoorWidth / 2f + 0.12f));
             var door = root.AddComponent<PoweredDoor>();
-            door.Capacity = capacity;
             door.Panel = panel.transform;
             door.Indicator = inside.transform.Find("Lamp").GetComponent<Renderer>();
             door.OutsideIndicator = outside.transform.Find("Lamp").GetComponent<Renderer>();
@@ -557,66 +542,45 @@ namespace CoOpHorror.Editor
             cctv.Spot = spot;
             RoomBounds(position + Quaternion.Euler(0f, yaw, 0f) * Vector3.forward * 2f, out cctv.RoomMin, out cctv.RoomMax);
             cctv.Fill = fill;
-            cctv.Capacity = 6f;
-            cctv.DetachSeconds = 4f;
-            cctv.SalvageSpawn = head;
+            cctv.Watts = 40;
+            cctv.StartsOn = false; // CctvCamera picks CctvCamera.LiveAtStart random cameras at spawn; the rest need power from a nose
             head.localRotation = Quaternion.Euler(cctv.DefaultPitch, defaultYaw, 0f);
-            // Salvage: the camera unit with a battery cable, hidden until ripped off.
-            cctv.Salvage = BuildSalvage($"Cctv_{number:00}", "salvage.cctv", 180, 3f, root.transform.position + root.transform.forward * 0.6f, housingMat,
-                new Vector3(0f, 0.1f, 0f), new Vector3(0.22f, 0.18f, 0.4f));
             // Tripo surveillance camera on its wall bracket (lens along the model's -X: turned a quarter so it
             // points out of the wall). It is mounted still - the feed still pans with the hidden head - so the
-            // bracket stays on the wall. The primitive housing keeps its collider (rip it off as before).
+            // bracket stays on the wall. The primitive housing keeps its collider (the nose latches onto it).
             var mount = Dress(root.transform, ShipProp("CctvCam"), new Vector3(0f, 2.95f, 0.36f), new Vector3(0.75f, 0.64f, 0.49f), 90f, true);
             if (mount != null)
             {
                 HideRenderers(root.transform, "Bracket", "Housing", "LensGlass", "Led");
                 cctv.Mount = mount.gameObject;
             }
-            // the ripped-off camera looks like the same unit
-            if (Dress(cctv.Salvage.transform, ShipProp("CctvCam"), Vector3.zero, new Vector3(0.42f, 0.36f, 0.28f), 90f, true) != null)
-                HideRenderers(cctv.Salvage.transform, "Body");
         }
 
-        // A ceiling lamp on a short cord, plus the salvage it drops when ripped off.
+        // Lamps hang low on long cords, into the players' eye line (the ceiling is ~3.3 m up).
+        private const float LampHeight = 2.35f;
+
+        // A ceiling lamp on a cord, on from the start (noses drain it darker).
         private static void BuildLamp(int number, Vector3 position)
         {
             var root = NetRoot($"Lamp_{number:00}", position, 0f);
             var metal = Mat("LampShade", new Color(0.3f, 0.32f, 0.28f));
             var fixture = new GameObject("Fixture");
             fixture.transform.SetParent(root.transform, false);
-            Shape(fixture.transform, "Cord", PrimitiveType.Cylinder, new Vector3(0f, 0.55f, 0f), Vector3.zero, new Vector3(0.02f, 0.45f, 0.02f), Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f)));
+            var cordLength = WallHeight - LampHeight;
+            Shape(fixture.transform, "Cord", PrimitiveType.Cylinder, new Vector3(0f, 0.1f + cordLength / 2f, 0f), Vector3.zero, new Vector3(0.02f, cordLength / 2f, 0.02f), Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f)));
             Shape(fixture.transform, "Shade", PrimitiveType.Cylinder, new Vector3(0f, 0.08f, 0f), Vector3.zero, new Vector3(0.55f, 0.06f, 0.55f), metal);
             var glass = Shape(fixture.transform, "Bulb", PrimitiveType.Sphere, new Vector3(0f, -0.02f, 0f), Vector3.zero, new Vector3(0.22f, 0.16f, 0.22f), Mat("Indicator", Color.white, unlit: true));
             var collider = root.AddComponent<BoxCollider>();
             collider.center = new Vector3(0f, 0.05f, 0f);
             collider.size = new Vector3(0.7f, 0.4f, 0.7f);
-            var bulb = PointLight(root.transform, "Light", new Vector3(0f, -0.25f, 0f), new Color(1f, 0.82f, 0.55f), 6f, 15f);
-            bulb.enabled = false;
+            collider.isTrigger = true; // hangs low: nothing bumps into it, the nose still finds it
+            var bulb = PointLight(root.transform, "Light", new Vector3(0f, -0.25f, 0f), new Color(1f, 0.82f, 0.55f), 11f, 13f);
             var lamp = root.AddComponent<PowerLamp>();
             lamp.NameKey = "lamp.ceiling";
-            lamp.Capacity = 5f;
-            lamp.DetachSeconds = 3f;
+            lamp.Watts = 60;
             lamp.Bulb = bulb;
             lamp.Glass = glass.GetComponent<Renderer>();
             lamp.Fixture = fixture;
-            lamp.SalvageSpawn = root.transform;
-            lamp.Salvage = BuildSalvage($"Lamp_{number:00}", "salvage.lamp", 90, 3f, new Vector3(position.x, 0f, position.z), metal,
-                new Vector3(0f, 0.06f, 0f), new Vector3(0.5f, 0.12f, 0.5f));
-        }
-
-        // Hidden appliance that appears when its fixture is ripped off: charged, tiny, with a battery cable.
-        private static Appliance BuildSalvage(string name, string nameKey, int value, float cord, Vector3 position, Material body, Vector3 center, Vector3 size)
-        {
-            var root = NetRoot("Salvage_" + name, position, 0f);
-            Shape(root.transform, "Body", PrimitiveType.Cube, center, Vector3.zero, size, body);
-            var indicator = Shape(root.transform, "Indicator", PrimitiveType.Cube, center + new Vector3(0f, size.y / 2f, 0f), Vector3.zero, new Vector3(0.06f, 0.02f, 0.06f), Mat("Indicator", Color.white, unlit: true));
-            var collider = root.AddComponent<BoxCollider>();
-            collider.center = center;
-            collider.size = size;
-            var appliance = FinishAppliance(root, name, nameKey, 6f, value, 1, true, cord, new Vector3(0f, center.y, -size.z / 2f - 0.01f), indicator.GetComponent<Renderer>(), size.y);
-            appliance.StartsHidden = true;
-            return appliance;
         }
 
         private static Material CctvFeedMaterial()
@@ -647,149 +611,85 @@ namespace CoOpHorror.Editor
             return material;
         }
 
-        // The settlement point: a cargo lift sunk flush in the floor under two hatch lids. Power it (hold) and
-        // the lids open on a platform with three sockets around a pylon; plug the cords in and they are reeled
-        // into the pylon, cracks spread, and the ground around the hatch caves into the open shaft underneath
-        // (ElecMoleMap leaves a 5 x 5 m hole in the floor here, with a deep pit you can fall to your death in).
+        // The ship's final power transmitter against the north hull: a tall steel cabinet with a glowing column
+        // that fills as noses pump power in, a row of step lamps, an intake the noses latch onto at chest height,
+        // a coil on top and a monitor above showing this round's requirement.
         private static void BuildTransmitter(Vector3 position, float yaw)
         {
             var root = NetRoot("Transmitter", position, yaw);
             var steel = Mat("Transmitter", new Color(0.3f, 0.36f, 0.45f), tex: Texture("Metal"), tiling: 2f);
-            var hatch = Mat("HatchSteel", new Color(0.45f, 0.42f, 0.35f), tex: Texture("Metal"), tiling: 1f);
             var hazard = Mat("Hazard", Color.white, tex: Texture("Hazard"), tiling: 4f);
             var lampMat = Mat("Indicator", Color.white, unlit: true);
-            var holeMat = Mat("Hole", new Color(0.01f, 0.01f, 0.01f), unlit: true);
-            var ground = FloorMaterial(RoomKind.TransmitterRoom);
-            const float hatchHalf = 1.4f;   // 2.8 m hatch
-            const float pit = TransmitterPitHalf;
+            var dark = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
+            // root faces into the cabin (+Z local); the back sits against the hull. Front face at z = +0.35.
+            const float front = 0.35f;
+            Box(root.transform, "Cabinet", new Vector3(0f, 1.1f, 0f), new Vector3(1.2f, 2.2f, 0.7f), steel);
+            Shape(root.transform, "Plinth", PrimitiveType.Cube, new Vector3(0f, 0.08f, 0.02f), Vector3.zero, new Vector3(1.26f, 0.16f, 0.76f), hazard);
+            Shape(root.transform, "FacePanel", PrimitiveType.Cube, new Vector3(0f, 1.15f, front + 0.01f), Vector3.zero, new Vector3(1.04f, 1.8f, 0.02f), dark);
+            // a coil on top
+            Shape(root.transform, "CoilPost", PrimitiveType.Cylinder, new Vector3(0f, 2.35f, -0.05f), Vector3.zero, new Vector3(0.12f, 0.15f, 0.12f), dark);
+            for (var r = 0; r < 3; r++)
+                Shape(root.transform, "Coil" + r, PrimitiveType.Cylinder, new Vector3(0f, 2.3f + r * 0.09f, -0.05f), Vector3.zero, new Vector3(0.34f - r * 0.06f, 0.025f, 0.34f - r * 0.06f), Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f)));
+            foreach (var t in root.GetComponentsInChildren<Transform>())
+                if (t.name.StartsWith("Coil") && t.TryGetComponent<Collider>(out var cc)) Object.DestroyImmediate(cc);
 
-            // ---- the lift (everything under Body sinks) ----
-            var bodyRoot = new GameObject("Body").transform;
-            bodyRoot.SetParent(root.transform, false);
-            Box(bodyRoot, "Platform", new Vector3(0f, -0.15f, 0f), new Vector3(2.7f, 0.3f, 2.7f), steel);
-            Box(bodyRoot, "Pylon", new Vector3(0f, 0.6f, 0f), new Vector3(0.6f, 1.2f, 0.6f), steel);
-            Shape(bodyRoot, "PylonBand", PrimitiveType.Cube, new Vector3(0f, 0.25f, 0f), Vector3.zero, new Vector3(0.62f, 0.12f, 0.62f), hazard);
-            Shape(bodyRoot, "MouthRim", PrimitiveType.Cylinder, new Vector3(0f, 1.21f, 0f), Vector3.zero, new Vector3(0.45f, 0.02f, 0.45f), holeMat);
-            var mouth = new GameObject("Mouth").transform;
-            mouth.SetParent(bodyRoot, false);
-            mouth.localPosition = new Vector3(0f, 1.25f, 0f);
-            // charge strip set in the floor by the hatch (the lift itself waits below until powered)
-            var power = Shape(root.transform, "PowerLamp", PrimitiveType.Cube, new Vector3(0f, 0.012f, -(hatchHalf + 0.35f)), Vector3.zero, new Vector3(1.6f, 0.02f, 0.12f), lampMat);
-            var sockets = new Transform[3];
-            var lamps = new Renderer[3];
-            for (var i = 0; i < 3; i++)
+            // the intake in the middle of the face, where noses latch on
+            var intakeRing = Shape(root.transform, "IntakeRing", PrimitiveType.Cylinder, new Vector3(0f, 1.1f, front + 0.04f), new Vector3(90f, 0f, 0f), new Vector3(0.3f, 0.04f, 0.3f), Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f)));
+            Object.DestroyImmediate(intakeRing.GetComponent<Collider>());
+            var intakeHole = Shape(root.transform, "IntakeHole", PrimitiveType.Cylinder, new Vector3(0f, 1.1f, front + 0.065f), new Vector3(90f, 0f, 0f), new Vector3(0.2f, 0.01f, 0.2f), lampMat);
+            Object.DestroyImmediate(intakeHole.GetComponent<Collider>());
+            var intake = new GameObject("Intake").transform;
+            intake.SetParent(root.transform, false);
+            intake.localPosition = new Vector3(0f, 1.1f, front + 0.08f);
+
+            // the fill column on the right of the face: its pivot is at the bottom so it grows upwards
+            var tube = Shape(root.transform, "FillTube", PrimitiveType.Cube, new Vector3(0.36f, 1.15f, front + 0.03f), Vector3.zero, new Vector3(0.18f, 1.6f, 0.03f), Mat("FillTube", new Color(0.03f, 0.06f, 0.08f)));
+            Object.DestroyImmediate(tube.GetComponent<Collider>());
+            var fill = new GameObject("Fill").transform;
+            fill.SetParent(root.transform, false);
+            fill.localPosition = new Vector3(0.36f, 0.38f, front + 0.05f);
+            var column = Shape(fill, "Column", PrimitiveType.Cube, new Vector3(0f, 0.5f, 0f), Vector3.zero, new Vector3(0.13f, 1f, 0.02f), lampMat);
+            Object.DestroyImmediate(column.GetComponent<Collider>());
+            fill.localScale = new Vector3(1f, 1.54f, 1f);
+
+            // five step lamps on the left of the face
+            var lamps = new Renderer[5];
+            for (var i = 0; i < lamps.Length; i++)
             {
-                // three socket posts on the platform's corners (where the lift model has its socket housings),
-                // facing out diagonally
-                var corner = i == 0 ? new Vector3(1f, 0f, 1f) : i == 1 ? new Vector3(-1f, 0f, 1f) : new Vector3(1f, 0f, -1f);
-                var dir = corner.normalized;
-                var post = Group(bodyRoot, "SocketPost_" + i, corner * 1.02f, Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg);
-                Box(post, "Post", new Vector3(0f, 0.3f, 0f), new Vector3(0.25f, 0.6f, 0.2f), steel);
-                sockets[i] = new GameObject("Socket_" + i).transform;
-                sockets[i].SetParent(post, false);
-                sockets[i].localPosition = new Vector3(0f, 0.3f, 0.14f);
-                lamps[i] = Shape(post, "SocketLamp", PrimitiveType.Sphere, new Vector3(0f, 0.5f, 0f), Vector3.zero, Vector3.one * 0.12f, lampMat).GetComponent<Renderer>();
+                var lamp = Shape(root.transform, "StepLamp" + i, PrimitiveType.Sphere, new Vector3(-0.36f, 0.5f + i * 0.32f, front + 0.04f), Vector3.zero, Vector3.one * 0.09f, lampMat);
+                Object.DestroyImmediate(lamp.GetComponent<Collider>());
+                lamps[i] = lamp.GetComponent<Renderer>();
             }
-            var beacon = PointLight(bodyRoot, "Beacon", new Vector3(0f, 1.6f, 0f), new Color(0.8f, 0.2f, 0.15f), 0.6f, 10f);
-            // Tripo cargo lift (platform, tall pylon, corner socket housings) over the primitives, its deck
-            // flush with the primitive platform's top; the primitives keep their colliders
-            if (Dress(bodyRoot, ShipProp("SettleLift"), new Vector3(0f, -0.37f, 0f), new Vector3(2.6f, 3.4f, 2.6f), 0f, true) != null)
-                HideRenderers(bodyRoot, "Platform", "Pylon", "PylonBand", "MouthRim", "Post", "SocketLamp"); // the monitor shows the sockets
+            var glow = PointLight(root.transform, "Glow", new Vector3(0f, 1.3f, front + 0.6f), new Color(0.3f, 0.6f, 1f), 1.2f, 5f);
 
-            // the big settlement monitor clamped round the pylon: four screens (one per side), rises and sinks
-            // with the lift (it is under Body)
-            const float faceW = 1.1f, faceH = 0.6f, displayY = 2.2f, half = faceW / 2f + 0.04f;
+            // the monitor above, facing the cabin
+            const float faceW = 1.1f, faceH = 0.6f;
             var displayRoot = new GameObject("Display").transform;
-            displayRoot.SetParent(bodyRoot, false);
-            displayRoot.localPosition = new Vector3(0f, displayY, 0f);
-            Shape(displayRoot, "Casing", PrimitiveType.Cube, Vector3.zero, Vector3.zero, new Vector3(faceW + 0.12f, faceH + 0.12f, faceW + 0.12f), Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f)));
-            var faces = new Transform[4];
-            for (var f = 0; f < 4; f++)
-            {
-                var outward = Quaternion.Euler(0f, f * 90f, 0f) * Vector3.forward;
-                Shape(displayRoot, "Screen" + f, PrimitiveType.Quad, outward * (half + 0.025f), new Vector3(0f, f * 90f + 180f, 0f), new Vector3(faceW, faceH, 1f), Mat("KioskScreen", new Color(0.01f, 0.04f, 0.02f), unlit: true));
-                faces[f] = new GameObject("Face" + f).transform;
-                faces[f].SetParent(displayRoot, false);
-                faces[f].localPosition = outward * (half + 0.03f);
-                faces[f].localRotation = Quaternion.Euler(0f, f * 90f + 180f, 0f); // UI faces its -Z: outwards
-            }
-            PointLight(displayRoot, "DisplayGlow", Vector3.down * 0.6f, new Color(0.45f, 1f, 0.55f), 0.5f, 4f);
-
-            // ---- hatch lids, hinged on the east / west edges, closed flush with the floor ----
-            Transform Lid(string name, float side)
-            {
-                var pivot = new GameObject(name).transform;
-                pivot.SetParent(root.transform, false);
-                pivot.localPosition = new Vector3(side * hatchHalf, 0f, 0f);
-                Box(pivot, "Plate", new Vector3(-side * hatchHalf / 2f, -0.04f, 0f), new Vector3(hatchHalf, 0.08f, hatchHalf * 2f), hatch);
-                Shape(pivot, "Stripe", PrimitiveType.Cube, new Vector3(-side * hatchHalf / 2f, 0.005f, 0f), Vector3.zero, new Vector3(hatchHalf * 0.8f, 0.01f, 0.25f), hazard);
-                return pivot;
-            }
-            var lidA = Lid("LidA", 1f);
-            var lidB = Lid("LidB", -1f);
-
-            // ---- the ground ring between the hatch and the pit edge: jagged slabs that cave in ----
-            var chunks = new List<Transform>();
-            var rng = new System.Random(31);
-            for (var gx = -pit; gx < pit - 0.01f; gx += 1f)
-            for (var gz = -pit; gz < pit - 0.01f; gz += 1f)
-            {
-                var cx = gx + 0.5f; var cz = gz + 0.5f;
-                if (Mathf.Abs(cx) < hatchHalf && Mathf.Abs(cz) < hatchHalf) continue;
-                var slab = Box(root.transform, "GroundChunk", new Vector3(cx, -0.25f, cz), new Vector3(1.02f, 0.5f, 1.02f), ground);
-                slab.transform.localRotation = Quaternion.Euler((float)rng.NextDouble() * 4f - 2f, (float)rng.NextDouble() * 30f - 15f, (float)rng.NextDouble() * 4f - 2f);
-                chunks.Add(slab.transform);
-            }
-            // order: closest to the hatch give way first
-            chunks.Sort((p, q) => p.localPosition.sqrMagnitude.CompareTo(q.localPosition.sqrMagnitude));
-
-            // ---- crack lines running out from the hatch (grow along local Z) ----
-            var cracks = new List<Transform>();
-            for (var k = 0; k < 9; k++)
-            {
-                var c = new GameObject("Crack").transform;
-                c.SetParent(root.transform, false);
-                c.localPosition = new Vector3(0f, 0.012f, 0f);
-                var heading = k * 40f + (float)rng.NextDouble() * 25f;
-                c.localRotation = Quaternion.Euler(0f, heading, 0f);
-                // distance from the centre to the square pit's edge along this heading
-                var edgeAt = pit / Mathf.Max(Mathf.Abs(Mathf.Cos(heading * Mathf.Deg2Rad)), Mathf.Abs(Mathf.Sin(heading * Mathf.Deg2Rad)));
-                var length = 2.4f + (float)rng.NextDouble() * 2.2f;
-                // the inner part runs over the slabs that cave in (hidden once they fall), the outer part
-                // stays on the solid floor around the shaft
-                var bend = (float)rng.NextDouble() * 14f - 7f;
-                Shape(c, "Inner", PrimitiveType.Cube, new Vector3(0f, 0f, (hatchHalf + edgeAt) / 2f), new Vector3(0f, bend, 0f), new Vector3(0.07f, 0.01f, edgeAt - hatchHalf), holeMat);
-                Shape(c, "Outer", PrimitiveType.Cube, new Vector3(0f, 0f, edgeAt + 0.05f + length / 2f), Vector3.zero, new Vector3(0.05f, 0.01f, length), holeMat);
-                c.localScale = new Vector3(1f, 1f, 0.001f);
-                c.gameObject.SetActive(false);
-                cracks.Add(c);
-            }
-
-            var hole = Shape(root.transform, "Abyss", PrimitiveType.Cube, new Vector3(0f, -24f, 0f), Vector3.zero, new Vector3(pit * 2f, 0.1f, pit * 2f), holeMat);
-            Object.DestroyImmediate(hole.GetComponent<Collider>());
-            hole.SetActive(false);
+            displayRoot.SetParent(root.transform, false);
+            displayRoot.localPosition = new Vector3(0f, 2.95f, 0.05f);
+            Shape(displayRoot, "Casing", PrimitiveType.Cube, Vector3.zero, Vector3.zero, new Vector3(faceW + 0.12f, faceH + 0.12f, 0.1f), dark);
+            Shape(displayRoot, "Screen", PrimitiveType.Quad, new Vector3(0f, 0f, 0.055f), new Vector3(0f, 180f, 0f), new Vector3(faceW, faceH, 1f), Mat("KioskScreen", new Color(0.01f, 0.04f, 0.02f), unlit: true));
+            var face = new GameObject("Face").transform;
+            face.SetParent(displayRoot, false);
+            face.localPosition = new Vector3(0f, 0f, 0.06f);
+            face.localRotation = Quaternion.Euler(0f, 180f, 0f); // UI faces its -Z: outwards
 
             var transmitter = root.AddComponent<Transmitter>();
-            transmitter.Capacity = 30f;
-            transmitter.Body = bodyRoot;
-            transmitter.Mouth = mouth;
-            transmitter.Hole = hole;
-            transmitter.Sockets = sockets;
-            transmitter.SocketLamps = lamps;
-            transmitter.PowerLamp = power.GetComponent<Renderer>();
-            transmitter.Beacon = beacon;
-            transmitter.LidA = lidA;
-            transmitter.LidB = lidB;
-            transmitter.Chunks = chunks.ToArray();
-            transmitter.Cracks = cracks.ToArray();
+            transmitter.RequiredWatts = 2500;
+            transmitter.Intake = intake;
+            transmitter.Fill = fill;
+            transmitter.FillRenderer = column.GetComponent<Renderer>();
+            transmitter.Lamps = lamps;
+            transmitter.Glow = glow;
             var display = displayRoot.gameObject.AddComponent<TransmitterDisplay>();
             display.Transmitter = transmitter;
-            display.Faces = faces;
+            display.Faces = new[] { face };
             display.FaceSize = new Vector2(faceW, faceH);
         }
 
+
         // Appliance root pivot is at its bottom so it rests on the floor or a counter.
-        private static Appliance BuildAppliance(string name, string nameKey, float capacity, int value, int weight, bool tiny, float cord,
+        private static Appliance BuildAppliance(string name, string nameKey, int watts,
             Vector3 position, float yaw, Material body, Vector3 bodyCenter, Vector3 bodySize, Vector3 indicatorCenter, Vector3 indicatorSize)
         {
             var root = NetRoot("Appliance_" + name, position, yaw);
@@ -843,8 +743,7 @@ namespace CoOpHorror.Editor
                     ?? SurfacePoint(root.transform, model, new Vector2((lo.x + hi.x) / 2f, (lo.y + hi.y) / 2f), hi.z)
                     ?? new Vector3((lo.x + hi.x) / 2f, (lo.y + hi.y) / 2f, hi.z);
             }
-            var anchor = new Vector3(0f, bodyCenter.y * 0.7f, bodyCenter.z - bodySize.z / 2f - 0.01f);
-            return FinishAppliance(root, name, nameKey, capacity, value, weight, tiny, cord, anchor, indicator.GetComponent<Renderer>(), bodyCenter.y * 2f);
+            return FinishAppliance(root, nameKey, watts, indicator.GetComponent<Renderer>(), bodyCenter.y * 2f);
         }
 
         // Where a ray from the front (local +Z, at local x/y) meets the model's mesh, in the root's local space,
@@ -867,7 +766,20 @@ namespace CoOpHorror.Editor
             return result;
         }
 
-        private static void BuildFan(Vector3 position, float yaw)
+        // A piece of furniture an appliance stands on: static, solid, carved out of the NavMesh. Returns where
+        // the appliance goes (on its top).
+        private static Vector3 OnStand(string name, Vector3 floor, float yaw, string model, Vector3 size)
+        {
+            var root = new GameObject(Prefix + "Stand_" + name);
+            root.transform.SetPositionAndRotation(floor, Quaternion.Euler(0f, yaw + FrontYaw, 0f));
+            root.isStatic = true;
+            Box(root.transform, "Body", new Vector3(0f, size.y / 2f, 0f), size, Mat("WardrobeWood", new Color(0.45f, 0.32f, 0.2f)));
+            if (PropModel(model) != null && Dress(root.transform, model, Vector3.zero, size) != null) HideRenderers(root.transform, "Body");
+            Obstacle(root, new Vector3(0f, size.y / 2f, 0f), size);
+            return floor + Vector3.up * size.y;
+        }
+
+        private static void BuildFan(Vector3 position, float yaw, float scale = 1f)
         {
             var root = NetRoot("Appliance_Fan", position, yaw);
             var body = Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f));
@@ -887,92 +799,30 @@ namespace CoOpHorror.Editor
                 hub.transform.localPosition = new Vector3(0f, 0.15f, 0.2f);
                 hub.transform.localScale = Vector3.one * 0.07f;
             }
-            FinishAppliance(root, "Fan", "appliance.fan", 25f, 200, 1, false, 6f, new Vector3(0f, 0.04f, -0.16f), hub.GetComponent<Renderer>(), 0.72f);
+            FinishAppliance(root, "appliance.fan", 50, hub.GetComponent<Renderer>(), 0.72f);
+            root.transform.localScale = Vector3.one * scale;
         }
 
-        private static Appliance FinishAppliance(GameObject root, string name, string nameKey, float capacity, int value, int weight, bool tiny, float cord,
-            Vector3 anchorLocal, Renderer indicator, float height)
+        // Rigidbody (kinematic until salvage drops out of its mount) and the appliance itself.
+        private static Appliance FinishAppliance(GameObject root, string nameKey, int watts, Renderer indicator, float height)
         {
-            var glow = PointLight(root.transform, "Glow", new Vector3(0f, height + 0.25f, 0.3f), new Color(0.35f, 1f, 0.85f), 1.6f, 3f);
-            glow.enabled = false;
-            var anchor = new GameObject("CordAnchor").transform;
-            anchor.SetParent(root.transform, false);
-            anchor.localPosition = anchorLocal;
+            var glow = PointLight(root.transform, "Glow", new Vector3(0f, height + 0.25f, 0.3f), new Color(0.35f, 1f, 0.85f), 0.8f, 2.5f);
             var body = root.AddComponent<Rigidbody>();
-            body.mass = 8f * weight;
+            body.mass = 8f;
             body.linearDamping = 0.2f;
             body.angularDamping = 1f;
+            body.isKinematic = true;
             body.interpolation = RigidbodyInterpolation.Interpolate;
-            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             AddPhysicsSync(root);
             var appliance = root.AddComponent<Appliance>();
             appliance.NameKey = nameKey;
-            appliance.Capacity = capacity;
-            appliance.BaseValue = value;
-            appliance.Weight = weight;
-            appliance.Tiny = tiny;
-            appliance.CordLength = cord;
-            appliance.CordAnchor = anchor;
+            appliance.Watts = watts;
             appliance.Indicator = indicator;
             appliance.Glow = glow;
-            appliance.Plug = BuildPlug(name, appliance, anchor.position);
             return appliance;
         }
 
-        // The plug is its own scene-root NetworkObject (a moving trigger), drawn with a cord to its appliance.
-        private static CordPlug BuildPlug(string name, Appliance appliance, Vector3 position)
-        {
-            var root = NetRoot("Plug_" + name, position, 0f);
-            var dark = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
-            var visual = new GameObject("Visual").transform;
-            visual.SetParent(root.transform, false);
-            Shape(visual, "Head", PrimitiveType.Cube, Vector3.zero, Vector3.zero, new Vector3(0.07f, 0.05f, 0.09f), dark);
-            var metal = Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f));
-            Shape(visual, "PinL", PrimitiveType.Cube, new Vector3(-0.015f, 0f, 0.06f), Vector3.zero, new Vector3(0.008f, 0.008f, 0.04f), metal);
-            Shape(visual, "PinR", PrimitiveType.Cube, new Vector3(0.015f, 0f, 0.06f), Vector3.zero, new Vector3(0.008f, 0.008f, 0.04f), metal);
-            var trigger = root.AddComponent<BoxCollider>();
-            trigger.isTrigger = true;
-            trigger.size = new Vector3(0.28f, 0.28f, 0.28f);
-            var line = root.AddComponent<LineRenderer>();
-            line.sharedMaterial = Mat("Cord", new Color(0.06f, 0.06f, 0.06f), unlit: true);
-            line.widthMultiplier = 0.022f;
-            line.numCapVertices = 2;
-            line.numCornerVertices = 2;
-            line.shadowCastingMode = ShadowCastingMode.Off;
-            line.positionCount = CordPlug.CordPoints;
-            // modelled plug (tools/blender/make_plug.py: round two-pin plug, pins towards +Z) over the primitives
-            var plugModel = Dress(visual, ShipProp("CordPlug"), new Vector3(0f, -0.033f, 0f), new Vector3(0.066f, 0.066f, 0.127f), 0f, true);
-            if (plugModel != null)
-            {
-                HideRenderers(visual, "Head", "PinL", "PinR");
-                // the FBX carries no colours: black plastic body, rubber ribs and tail, brass-ish pins
-                foreach (var r in plugModel.GetComponentsInChildren<Renderer>())
-                {
-                    var mats = r.sharedMaterials;
-                    for (var m = 0; m < mats.Length; m++)
-                    {
-                        var n = mats[m] != null ? mats[m].name : string.Empty;
-                        mats[m] = n.Contains("Pins") ? Mat("PlugPins", new Color(0.75f, 0.68f, 0.5f))
-                            : n.Contains("Rubber") ? Mat("PlugRubber", new Color(0.05f, 0.05f, 0.055f))
-                            : Mat("PlugPlastic", new Color(0.1f, 0.1f, 0.11f));
-                    }
-                    r.sharedMaterials = mats;
-                }
-            }
-            // the cord itself: a round rubber tube rebuilt every frame by CordPlug (the line is the fallback)
-            var tube = new GameObject("CordTube");
-            tube.transform.SetParent(root.transform, false);
-            var tubeFilter = tube.AddComponent<MeshFilter>();
-            var tubeRenderer = tube.AddComponent<MeshRenderer>();
-            tubeRenderer.sharedMaterial = Mat("CordRubber", new Color(0.05f, 0.05f, 0.055f));
-            tubeRenderer.shadowCastingMode = ShadowCastingMode.Off;
-            var plug = root.AddComponent<CordPlug>();
-            plug.Appliance = appliance;
-            plug.Cord = line;
-            plug.CordMesh = tubeFilter;
-            plug.Visual = visual;
-            return plug;
-        }
 
         // The ship's broadcast microphone on the CCTV desk.
         private static void BuildShipMic(Vector3 position)

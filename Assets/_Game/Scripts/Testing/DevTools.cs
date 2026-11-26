@@ -129,16 +129,39 @@ namespace CoOpHorror.Testing
             if (IsHost) TempMonster.Frozen = !TempMonster.Frozen;
         }
 
-        private static void FillPower()
+        // Quick restart (host): the stage starts over in the same room, without reconnecting. Every object
+        // placed in the scene is despawned and spawned again (each resets itself in OnNetworkSpawn), bodies are
+        // removed, and every player is put back at a spawn slot alive, full health, with an empty tank.
+        private static void QuickRestart()
         {
-            if (IsHost && PowerGrid.Instance != null) PowerGrid.Instance.ServerAdd(PowerGrid.Capacity);
+            var nm = NetworkManager.Singleton;
+            if (nm == null || !nm.IsServer) return;
+            foreach (var body in new System.Collections.Generic.List<Corpse>(Corpse.Bodies))
+                if (body != null && body.IsSpawned) body.NetworkObject.Despawn(true);
+            var sceneObjects = new System.Collections.Generic.List<NetworkObject>();
+            foreach (var obj in nm.SpawnManager.SpawnedObjectsList)
+                if (obj != null && obj.IsSceneObject == true) sceneObjects.Add(obj);
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned && p.TryGetComponent<PlayerInteractor>(out var who)) who.ServerLetGoOfEverything();
+            foreach (var obj in sceneObjects) obj.Despawn(false);
+            foreach (var obj in sceneObjects) obj.Spawn();
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned) p.ServerResetForRestart(RoomController.PickRespawnPosition(p.transform));
+            Debug.Log($"[ElecMole] Quick restart: respawned {sceneObjects.Count} scene objects");
         }
 
         private static void ChargeEverything()
         {
             if (!IsHost) return;
-            foreach (var a in Appliance.All) if (a.IsSpawned && !a.IsGone) a.Charge.Value = a.Capacity;
-            foreach (var d in InstalledDevice.Devices) if (d.IsSpawned && !d.Detached.Value) d.Charge.Value = d.Capacity;
+            foreach (var nose in UnityEngine.Object.FindObjectsByType<PlayerNose>(FindObjectsSortMode.None))
+                if (nose.IsSpawned) nose.ServerAdd(PlayerNose.GaugeWatts);
+        }
+
+        // Later stages drain faster: raise the stage number to try it.
+        private static void StageUp()
+        {
+            var stage = StageDirector.Instance;
+            if (IsHost && stage != null && stage.IsSpawned) stage.Level.Value++;
         }
 
         private static void GoTo(Vector3 position)
@@ -191,8 +214,9 @@ namespace CoOpHorror.Testing
             status = Label(rect, string.Empty, 14, new Color(0.8f, 0.9f, 0.88f));
             Button(rect, GameText.Get("dev.player2"), Player2);
             Button(rect, GameText.Get("dev.freeze"), FreezeMonsters);
-            Button(rect, GameText.Get("dev.power"), FillPower);
+            Button(rect, GameText.Get("dev.restart"), QuickRestart);
             Button(rect, GameText.Get("dev.charge"), ChargeEverything);
+            Button(rect, GameText.Get("dev.stageUp"), StageUp);
             Button(rect, GameText.Get("dev.toTransmitter"), GoToTransmitter);
             Button(rect, GameText.Get("dev.toShip"), GoToShip);
             Button(rect, GameText.Get("dev.close"), () => SetOpen(false));

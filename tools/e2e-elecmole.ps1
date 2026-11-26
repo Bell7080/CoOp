@@ -6,9 +6,9 @@ client in a separate process, connected over Relay. Each step calls CoOpHorror.T
 processes; the step drives that process's own player through the real input paths (walking NavMesh routes,
 aiming, clicks, holds, skill checks). The runner asserts on the replicated state and saves screenshots.
 
-Flow: room + join -> generator with skill checks -> missed check (stall + monster comes) -> ship door ->
-CCTV power + CCTV view -> transmitter -> three appliances (telekinesis carry, cord drag, inventory) ->
-settlement + blackout -> death, ghost spectating, revive by hitting -> body carried aboard -> launch -> escape.
+Flow: room + join -> ship door -> CCTV view -> nose drinks the kettle -> tank pumped into the ship's
+transmitter -> lamp drained and relit -> CCTV drained -> (host tops the transmitter up) ->
+microwave -> transmitter full (surplus to money) -> death, ghost spectating, revive -> body carried aboard -> launch (transmitter fires, blackout) -> escape.
 
 Usage (PowerShell, project root, with the Editor open and idle):
   .\tools\e2e-elecmole.ps1
@@ -158,54 +158,46 @@ try {
     # ---------- gameplay ----------
     Step host setup | Out-Null
     Step client setup | Out-Null
-    Check 'start state' @('stage=Exploring', 'door=closed', 'tx=Dormant', 'p0=hp100', 'p1=hp100', 'grid=0')
+    Check 'start state' @('money=0', 'stage=Exploring', 'door=closed', 'tx=Charging', 'stored=300/2500', 'p0=hp100', 'p1=hp100', 'cctv=\d+,\d+;')
 
-    # Generator with skill checks; capture one check on screen.
-    if (Step host skill-wait) { Shot '01-host-skill-check' }
-    Step host crank-stop | Out-Null
-    Step host crank 70 | Out-Null
-    Check 'skill checks answered' @('skillSeen=[1-9]')
-    Step host noise-test | Out-Null
     Step host door | Out-Null
     Check 'door open' @('door=open')
     Shot '02-host-door-open'
 
-    # Client goes out; host keeps cranking for power.
-    Step host crank-hold | Out-Null
+    # Client goes out; the host watches the CCTV.
+    Step host cctv-live 1 | Out-Null
     Step client power-cctv 1 | Out-Null
-    Step host crank-stop | Out-Null
     Step host cctv-view 1 | Out-Null
     Shot '03-host-cctv-view'
     Check 'cctv view' @('cctv=1', 'cctvView=True', 'map1')
     Step host cctv-exit | Out-Null
-    Step host crank-hold | Out-Null
 
-    Step client power-lamp | Out-Null
-    Check 'lamp lit' @('lamps=1')
-    Shot '03b-client-lamp' 'client'
-    Step client activate-tx | Out-Null
-    Check 'transmitter active' @('tx=Active')
-    Step client deliver 'Fan:carry' 240 | Out-Null
-    Shot '04-client-fan-plugged' 'client'
-    Step client deliver 'Radio:drag' 240 | Out-Null
-    Check 'cord drag lowered value' @('radio=C\d+,v(1[0-4]\d|\d{1,2})/150')
+    Step client suck 'Kettle' 240 | Out-Null
+    Check 'tank filled from the kettle' @('kettle=0/1500W', 'p1=[^;]*tank1500')
+    Shot '04-client-kettle' 'client'
+    Step client inject 180 | Out-Null
+    Check 'tank pumped into the transmitter' @('tx=Charging', 'stored=1800/2500', 'p1=[^;]*tank0')
+    Step client drain-lamp | Out-Null
+    Check 'lamp drained' @('drained=1', 'p1=[^;]*tank60')
+    Shot '03b-client-lamp-dark' 'client'
+    Step client relight-lamp | Out-Null
+    Check 'lamp relit with the right button' @('drained=0', 'p1=[^;]*tank0')
     Step client walk '-9,-3' | Out-Null
     Step client hide | Out-Null
     Check 'tucked under a desk' @('p1=hp\d+,rv\d+,tucked')
     Shot '05a-client-hiding' 'client'
     if (-not $script:failed) { Invoke-Eval 'return CoOpHorror.Testing.ElecMoleE2E.StandUp();' $Client | Out-Null; Start-Sleep -Seconds 1 }
-    Step client rip-cctv 1 | Out-Null
-    Check 'camera ripped off' @('ripped=1', 'cctv=;')
-    Step client deliver 'Cctv_01:inventory' 300 | Out-Null
+    Step client drain-cctv 1 | Out-Null
+    Check 'camera drained' @('drained=1', 'p1=[^;]*tank40')
+    Step host tx-cheat 2450 | Out-Null
+    Step client suck 'Microwave' 240 | Out-Null
+    Step client inject 180 | Out-Null
     if (-not $script:failed) {
         Start-Sleep -Milliseconds 1200
-        Shot '05-client-settlement' 'client'
+        Shot '05-client-transmitter-full' 'client'
     }
-    $blackout = $false
-    if (-not $script:failed) { $blackout = Wait-Until { (Snapshot) -match 'stage=Blackout' } 20 'blackout' }
-    Check 'settlement and blackout' @('stage=Blackout', 'tx=Gone', 'earned=[1-9]', 'fan=[^;]*swallowed', 'radio=[^;]*swallowed', 'salvage.cctv=[^;]*swallowed', 'lamps=0')
-    Step host crank-stop | Out-Null
-    Shot '06-host-blackout'
+    # Full: no blackout yet - the launch button is armed and the surplus became money.
+    Check 'transmitter full, surplus exchanged' @('money=9\d', 'stage=Exploring', 'tx=Charging', 'stored=2500/2500', 'microwave=0/1000W')
 
     # Radio: walkie outside is heard in the ship.
     Step client radio on | Out-Null
@@ -224,8 +216,10 @@ try {
     Step host carry-corpse 1 | Out-Null
     Check 'body aboard' @('corpse1=ship')
     Step host launch | Out-Null
+    Check 'launch fired the transmitter and blacked out' @('stage=Launching', 'tx=Transmitting', 'lamps=0')
+    Shot '06-host-launch-blackout'
     Step host wait-escape | Out-Null
-    Check 'escaped with revived client' @('stage=Escaped', 'aboard=(0,1|1,0);', 'p1=hp50', 'corpses=0')
+    Check 'escaped with revived client' @('stage=Escaped', 'earned=2500', 'tx=Done', 'aboard=(0,1|1,0);', 'p1=hp50', 'corpses=0')
     Shot '08-host-escaped'
     Shot '09-client-escaped' 'client'
 }

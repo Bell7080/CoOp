@@ -20,6 +20,7 @@ Shader "CoOp/CctvFisheye"
         _Zoom ("Zoom", Float) = 1
         _Signal ("Signal", Range(0, 1)) = 1
         _Static ("Switching static", Range(0, 1)) = 0
+        _Rect ("Source rect in the feed (offset xy, size zw)", Vector) = (0, 0, 1, 1)
         _Curve ("CRT curvature", Range(0, 0.5)) = 0.16
         _Corner ("Rounded corner size", Range(0.01, 0.5)) = 0.14
         _Lines ("Scanlines", Float) = 260
@@ -56,6 +57,7 @@ Shader "CoOp/CctvFisheye"
             };
 
             sampler2D _MainTex;
+            float4 _Rect;
             float4 _Color;
             float _HalfAngle, _SrcHalfTan, _SrcAspect, _Aspect, _Zoom, _Signal, _Static, _Curve, _Corner, _Lines, _Gain, _Grain, _Lift;
 
@@ -79,7 +81,7 @@ Shader "CoOp/CctvFisheye"
                 float lens = 1.0;
 
                 // Night-vision style: gain, then a gamma lift so dark rooms read instead of going black.
-                float3 col = pow(saturate(tex2D(_MainTex, saturate(suv)).rgb * _Gain), _Lift) * lens;
+                float3 col = pow(saturate(tex2D(_MainTex, _Rect.xy + saturate(suv) * _Rect.zw).rgb * _Gain), _Lift) * lens;
 
                 // 3) Surveillance look, kept light.
                 float lum = dot(col, float3(0.299, 0.587, 0.114));

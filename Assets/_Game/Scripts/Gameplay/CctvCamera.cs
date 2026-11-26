@@ -6,16 +6,17 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // A wall-mounted CCTV camera. Outside players power it once (hold the left button on it or its junction
-    // box); from then on it is linked to the ship's CCTV panel. The viewer inside the ship can pan, tilt and
-    // zoom it; the host keeps the shared aim so everyone sees the camera head turn. The blackout cuts it off.
-    // Powered, it can be ripped off and sold (InstalledDevice) — the feed goes dark for good.
+    // A wall-mounted CCTV camera, linked to the ship's CCTV panel from the start. The viewer inside the ship
+    // can pan, tilt and zoom it; the host keeps the shared aim so everyone sees the camera head turn. Noses
+    // can drink its power (InstalledDevice): the more is gone, the more static on its feed; empty, it is dead.
+    // The blackout cuts it off.
     public sealed class CctvCamera : InstalledDevice
     {
         public const float YawLimit = 80f;
         public const float PitchMin = -20f; // looking up (Euler X is positive downward)
         public const float PitchMax = 65f;  // looking down
         public const float AimSendInterval = 0.1f;
+        public const int LiveAtStart = 2;   // cameras picked at random to be powered when the stage starts
 
         public static readonly List<CctvCamera> All = new();
 
@@ -35,7 +36,9 @@ namespace CoOpHorror.Gameplay
         public readonly NetworkVariable<float> Pitch = new(0f);
 
         public override string DisplayName => GameText.Get(NameKey);
-        protected override string OnlineLabel => GameText.Format("interact.cctvOnline", DisplayName);
+
+        // Static on its feed: none at full power, heavy just before it dies, full when it is dead.
+        public float FeedStatic => Online ? (1f - Fraction) * 0.85f : 1f;
 
         // Local viewer override so the view turns without waiting for the host.
         private bool localAim;
@@ -73,8 +76,36 @@ namespace CoOpHorror.Gameplay
             base.OnNetworkSpawn();
             localAim = false;
             if (!IsServer) return;
+            // Only LiveAtStart random cameras start powered; the rest start dead until a nose pumps power in.
+            Power.Value = PickedLive(this) ? Watts : 0f;
             Yaw.Value = DefaultYaw;
             Pitch.Value = DefaultPitch;
+        }
+
+        // Host: the random pick of live cameras, redrawn once per spawn wave (scene objects spawn together in
+        // one frame, also on the dev quick restart).
+        private static readonly HashSet<CctvCamera> livePick = new();
+        private static int pickFrame = -1;
+
+        private static bool PickedLive(CctvCamera camera)
+        {
+            if (pickFrame != Time.frameCount)
+            {
+                pickFrame = Time.frameCount;
+                livePick.Clear();
+                var pool = new List<CctvCamera>();
+                foreach (var c in All) if (c != null) pool.Add(c);
+                for (var n = 0; n < LiveAtStart && pool.Count > 0; n++)
+                {
+                    var i = Random.Range(0, pool.Count);
+                    livePick.Add(pool[i]);
+                    pool.RemoveAt(i);
+                }
+                var names = new System.Text.StringBuilder();
+                foreach (var c in livePick) names.Append(c.name).Append(' ');
+                Debug.Log("[ElecMole] CCTV live at start: " + names);
+            }
+            return livePick.Contains(camera);
         }
 
         public float CurrentYaw => localAim ? localYaw : Yaw.Value;
@@ -120,8 +151,6 @@ namespace CoOpHorror.Gameplay
         {
             if (Head != null)
             {
-                Head.gameObject.SetActive(!IsSpawned || !Detached.Value);
-                if (Mount != null) Mount.SetActive(!IsSpawned || !Detached.Value);
                 var target = Quaternion.Euler(IsSpawned ? CurrentPitch : DefaultPitch, IsSpawned ? CurrentYaw : DefaultYaw, 0f);
                 Head.localRotation = localAim ? target : Quaternion.Slerp(Head.localRotation, target, 1f - Mathf.Exp(-10f * Time.deltaTime));
             }

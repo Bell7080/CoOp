@@ -4,7 +4,8 @@ using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // The ship's launch button. Usable after the blackout; starts the departure countdown.
+    // The ship's launch button. Works once the transmitter is full: fires the transmitter (blackout) and starts
+    // the departure countdown. Before that it only says what is missing.
     public sealed class LaunchButton : Interactable
     {
         public Renderer Lamp;
@@ -29,14 +30,18 @@ namespace CoOpHorror.Gameplay
             var phase = stage != null && stage.IsSpawned ? stage.Phase.Value : StagePhase.Exploring;
             switch (phase)
             {
-                case StagePhase.Blackout:
-                    prompt = GameText.Get("interact.launch");
-                    return InteractKind.Press;
+
                 case StagePhase.Launching:
                     prompt = GameText.Format("interact.launching", Mathf.CeilToInt(stage.LaunchRemaining));
                     return InteractKind.None;
                 case StagePhase.Exploring:
-                    prompt = GameText.Get("interact.launchLocked");
+                    if (stage != null && stage.LaunchReady)
+                    {
+                        prompt = GameText.Get("interact.launch");
+                        return InteractKind.Press;
+                    }
+                    var tx = Transmitter.Instance;
+                    prompt = tx != null ? GameText.Format("interact.launchLocked", tx.StoredWatts, tx.RequiredWatts) : string.Empty;
                     return InteractKind.None;
                 default:
                     prompt = string.Empty;
@@ -62,9 +67,10 @@ namespace CoOpHorror.Gameplay
                 Cap.localPosition = capHome + Cap.parent.InverseTransformVector(Vector3.down * (PressDepth * press));
             }
             if (Lamp == null) return;
+            var ready = stage != null && stage.LaunchReady;
             var color = phase switch
             {
-                StagePhase.Blackout => Mathf.PingPong(Time.time * 2f, 1f) > 0.5f ? new Color(0.3f, 1f, 0.4f) : new Color(0.05f, 0.25f, 0.08f),
+                StagePhase.Exploring when ready => Mathf.PingPong(Time.time * 2f, 1f) > 0.5f ? new Color(0.3f, 1f, 0.4f) : new Color(0.05f, 0.25f, 0.08f),
                 StagePhase.Launching => new Color(1f, 0.8f, 0.2f),
                 StagePhase.Escaped => new Color(0.3f, 1f, 0.4f),
                 _ => new Color(0.25f, 0.04f, 0.03f),

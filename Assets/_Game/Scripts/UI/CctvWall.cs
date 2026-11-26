@@ -21,6 +21,11 @@ namespace CoOpHorror.UI
         private readonly List<Material> materials = new();
         private static readonly int BaseMap = Shader.PropertyToID("_BaseMap");
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
+        private static readonly int MainTex = Shader.PropertyToID("_MainTex");
+        private static readonly int RectId = Shader.PropertyToID("_Rect");
+        private static readonly int SignalId = Shader.PropertyToID("_Signal");
+        private static readonly int StaticId = Shader.PropertyToID("_Static");
+        private bool feedLook;   // tiles use the CCTV monitor shader (same static as the desk monitor)
 
         private void Awake()
         {
@@ -39,9 +44,24 @@ namespace CoOpHorror.UI
             if (UniversalRenderPipeline.asset != null && UniversalRenderPipeline.asset.rendererDataList.Length > CctvView.CctvRendererIndex)
                 data.SetRenderer(CctvView.CctvRendererIndex);
             data.volumeLayerMask &= ~(1 << 29); // player viewing lens must not bend the preview feeds
+            var feedMaterial = FindFirstObjectByType<CctvView>(FindObjectsInactive.Include) is { FeedMaterial: { } fm } ? fm : null;
+            feedLook = feedMaterial != null;
             for (var i = 0; i < Tiles.Length; i++)
             {
                 if (Tiles[i] == null) { materials.Add(null); continue; }
+                if (feedLook)
+                {
+                    // Same CRT shader as the desk monitor, reading this tile's cell of the atlas.
+                    var f = new Material(feedMaterial);
+                    f.SetTexture(MainTex, atlas);
+                    f.SetVector(RectId, new Vector4((i % Columns) / (float)Columns, (Rows - 1 - i / Columns) / (float)Rows, 1f / Columns, 1f / Rows));
+                    f.SetFloat("_Aspect", TileWidth / (float)TileHeight);
+                    f.SetFloat("_SrcAspect", TileWidth / (float)TileHeight);
+                    f.SetFloat("_Lines", 120f);
+                    Tiles[i].sharedMaterial = f;
+                    materials.Add(f);
+                    continue;
+                }
                 var m = new Material(Tiles[i].sharedMaterial);
                 m.SetTexture(BaseMap, atlas);
                 var col = i % Columns;
@@ -51,6 +71,19 @@ namespace CoOpHorror.UI
                 Tiles[i].sharedMaterial = m;
                 materials.Add(m);
             }
+        }
+
+        private void ClearTile(int i)
+        {
+            var col = i % Columns;
+            var row = Rows - 1 - i / Columns;
+            var previous = RenderTexture.active;
+            RenderTexture.active = atlas;
+            GL.PushMatrix();
+            GL.Viewport(new Rect(col * atlas.width / (float)Columns, row * atlas.height / (float)Rows, atlas.width / (float)Columns, atlas.height / (float)Rows));
+            GL.Clear(false, true, Color.black);
+            GL.PopMatrix();
+            RenderTexture.active = previous;
         }
 
         private void OnDestroy()
@@ -64,13 +97,23 @@ namespace CoOpHorror.UI
             var cams = CctvCamera.All;
             var stage = StageDirector.Instance;
             var me = Player.PlayerInteractor.Local;
-            var inShip = me != null && me.IsSpawned && (stage == null || stage.InShip(me.transform.position));
+            var view = Camera.main != null ? Camera.main.transform.position : (me != null ? me.transform.position : Vector3.zero);
+            var inShip = me != null && me.IsSpawned && (stage == null || stage.InShip(view)); // ghosts watching too
             for (var i = 0; i < materials.Count; i++)
             {
                 if (materials[i] == null) continue;
                 var online = i < cams.Count && cams[i].Online;
-                var flicker = 0.9f + Mathf.PerlinNoise(Time.time * 3f, i) * 0.2f;
-                materials[i].SetColor(BaseColor, online ? new Color(0.8f, 1f, 0.85f) * flicker : new Color(0.05f, 0.12f, 0.08f));
+                if (feedLook)
+                {
+                    // Drinking a camera's power fills its tile with the same static as the desk monitor.
+                    materials[i].SetFloat(SignalId, online ? 1f : 0f);
+                    materials[i].SetFloat(StaticId, online ? cams[i].FeedStatic : 1f);
+                    continue;
+                }
+                // a drained camera's tile flickers harder and darker
+                var weak = online ? cams[i].FeedStatic : 1f;
+                var flicker = 0.9f + Mathf.PerlinNoise(Time.time * (3f + weak * 25f), i) * (0.2f + weak * 1.2f) - weak * 0.6f;
+                materials[i].SetColor(BaseColor, online ? new Color(0.8f, 1f, 0.85f) * Mathf.Clamp(flicker, 0.1f, 1.1f) : new Color(0.05f, 0.12f, 0.08f));
             }
             if (!inShip || cams.Count == 0 || CctvView.Viewing) return;
 
@@ -79,7 +122,8 @@ namespace CoOpHorror.UI
             {
                 var i = next;
                 next = (next + 1) % Mathf.Min(cams.Count, Columns * Rows);
-                if (i >= cams.Count || !cams[i].Online || cams[i].Lens == null) continue;
+                if (i >= cams.Count || cams[i].Lens == null) continue;
+                if (!cams[i].Online) { ClearTile(i); continue; } // a dead camera's tile goes black, not frozen
                 var cam = cams[i];
                 shot.transform.SetPositionAndRotation(cam.Lens.position, cam.Lens.rotation);
                 var col = i % Columns;

@@ -73,7 +73,7 @@ namespace CoOpHorror.Gameplay
             var bones = new System.Collections.Generic.List<FirmBone>();
             foreach (var bone in Animator.GetComponentsInChildren<Transform>())
             {
-                var motion = bone.name == "Hips" ? 0.35f : bone.name == "Spine" ? 0.22f : bone.name == "Head" ? 0.15f : -1f;
+                var motion = bone.name == "Hips" ? 0.15f : bone.name == "Spine" ? 0.1f : bone.name == "Head" ? 0.07f : -1f;
                 if (motion < 0f) continue;
                 bones.Add(new FirmBone { Bone = bone, Position = bone.localPosition,
                     Rotation = bone.localRotation, Scale = bone.localScale, Motion = motion });

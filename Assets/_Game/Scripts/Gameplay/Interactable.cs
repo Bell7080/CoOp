@@ -46,7 +46,18 @@ namespace CoOpHorror.Gameplay
         // Holding this shows timing skill checks to the holder.
         public virtual bool UsesSkillChecks => false;
 
-        // A sticky hold (telekinesis) continues while the button is down even when the player looks away.
+        // Right mouse button (the nose pumps power OUT of the tank into this): what it does for this player
+        // right now and the prompt. Holding it calls ServerHoldRight on the host like ServerHold.
+        public virtual InteractKind DescribeRight(PlayerInteractor who, out string prompt)
+        {
+            prompt = string.Empty;
+            return InteractKind.None;
+        }
+
+        // Server: every frame while the player holds the right button on this. Return false to end the hold.
+        public virtual bool ServerHoldRight(PlayerInteractor who, float dt) => false;
+
+        // A sticky hold (telekinesis, a latched nose) continues while the button is down even when the player looks away.
         public virtual bool StickyHold => false;
 
         // Host-side reach while holding (sticky holds swing the object around).

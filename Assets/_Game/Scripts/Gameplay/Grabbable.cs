@@ -178,8 +178,15 @@ namespace CoOpHorror.Gameplay
 
             var center = Body.worldCenterOfMass;
             // Holders whose hold point is far from the object (stuck behind a wall) let go.
-            foreach (var p in list)
-                if ((p.GrabPoint() - center).sqrMagnitude > BreakDistance * BreakDistance) p.ServerForceEndHold(this);
+            // (letting go changes the holder list, which ResolveHolders reuses: walk a copy, then re-read it)
+            var lettingGo = false;
+            foreach (var p in list.ToArray())
+                if ((p.GrabPoint() - center).sqrMagnitude > BreakDistance * BreakDistance) { p.ServerForceEndHold(this); lettingGo = true; }
+            if (lettingGo)
+            {
+                list = ResolveHolders();
+                if (list.Count == 0) return;
+            }
 
             var lift = Lift;
             // Precarious: the hold point drifts a little.
@@ -256,7 +263,7 @@ namespace CoOpHorror.Gameplay
             if (list.Count == 0 && aura == null) return;
             if (aura == null) aura = TelekinesisAura.For(transform);
             pawPoints.Clear();
-            foreach (var p in list) pawPoints.Add(p.EyePosition + p.AimRotation * new Vector3(0.12f, -0.3f, 0.38f));
+            foreach (var p in list) pawPoints.Add(p.TryGetComponent<CoOpHorror.Player.MoleRig>(out var rig) && rig.ArmR2 != null ? rig.RightPaw : p.EyePosition + p.AimRotation * new Vector3(0.12f, -0.3f, 0.38f)); // from the real paw
             aura.Show(pawPoints, Lift < 1f ? 1f : (Weight > 1 ? 0.5f : 0f));
         }
 

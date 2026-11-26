@@ -4,10 +4,8 @@ using UnityEngine.UI;
 
 namespace CoOpHorror.Gameplay
 {
-    // The big four-sided monitor on the settlement lift's pylon: the settlement target, how much the plugged
-    // appliances are worth so far (with a bar), and how many sockets are filled. It is part of the lift, so it
-    // waits below with it, rises when powered and sinks with it at the end. Presentation only (every peer, from
-    // replicated transmitter / plug state).
+    // The monitor on the ship's transmitter: how much power this round needs, how much is in, and a bar.
+    // Presentation only (every peer, from the replicated transmitter state).
     public sealed class TransmitterDisplay : MonoBehaviour
     {
         public const float PixelsPerMetre = 300f;
@@ -16,7 +14,7 @@ namespace CoOpHorror.Gameplay
         public Transform[] Faces;                 // UI roots, each facing its -Z outwards
         public Vector2 FaceSize = new(1.1f, 0.6f);
 
-        private Text[] status, target, plugged, sockets;
+        private Text[] status, target, stored;
         private RectTransform[] bars;
         private Image[] barImages;
 
@@ -28,7 +26,7 @@ namespace CoOpHorror.Gameplay
         private void Start()
         {
             var n = Faces.Length;
-            status = new Text[n]; target = new Text[n]; plugged = new Text[n]; sockets = new Text[n];
+            status = new Text[n]; target = new Text[n]; stored = new Text[n];
             bars = new RectTransform[n]; barImages = new Image[n];
             for (var i = 0; i < n; i++) BuildFace(i);
         }
@@ -44,9 +42,8 @@ namespace CoOpHorror.Gameplay
             var w = FaceSize.x * PixelsPerMetre;
             var h = FaceSize.y * PixelsPerMetre;
             status[i] = Label(rect, new Rect(12, 8, w - 24, 26), 18, TextAnchor.MiddleLeft, Dim);
-            sockets[i] = Label(rect, new Rect(12, 8, w - 24, 26), 18, TextAnchor.MiddleRight, Dim);
             target[i] = Label(rect, new Rect(12, 40, w - 24, 44), 30, TextAnchor.MiddleLeft, Amber);
-            plugged[i] = Label(rect, new Rect(12, 88, w - 24, 40), 26, TextAnchor.MiddleLeft, Green);
+            stored[i] = Label(rect, new Rect(12, 88, w - 24, 40), 26, TextAnchor.MiddleLeft, Green);
             var back = Block(rect, new Rect(12, h - 44, w - 24, 26), new Color(0.08f, 0.2f, 0.1f));
             barImages[i] = Block(back.rectTransform, new Rect(2, 2, w - 28, 22), Green);
             bars[i] = barImages[i].rectTransform;
@@ -56,21 +53,19 @@ namespace CoOpHorror.Gameplay
         {
             if (status == null || Transmitter == null) return;
             var tx = Transmitter;
-            var goal = Mathf.Max(1, tx.TargetValue);
-            var value = tx.IsSpawned ? tx.PluggedValue : 0;
-            var phase = tx.IsSpawned ? tx.Phase.Value : TransmitterPhase.Dormant;
+            var goal = Mathf.Max(1, tx.RequiredWatts);
+            var value = tx.StoredWatts;
+            var phase = tx.IsSpawned ? tx.Phase.Value : TransmitterPhase.Charging;
             string state;
-            Color stateColor = Dim;
+            Color stateColor;
             switch (phase)
             {
-                case TransmitterPhase.Dormant: state = GameText.Format("settle.needPower", tx.ChargePercent); stateColor = Amber; break;
-                case TransmitterPhase.Active:
-                    if (!tx.IsRaised) { state = GameText.Get("settle.rising"); stateColor = Blue; }
-                    else if (tx.PluggedCount >= tx.Required && !tx.MeetsTarget) { state = GameText.Get("settle.short"); stateColor = new Color(1f, 0.35f, 0.3f); }
-                    else { state = GameText.Get("settle.ready"); stateColor = Blue; }
+                case TransmitterPhase.Charging:
+                    state = GameText.Get(tx.IsFull ? "settle.ready" : "settle.charging");
+                    stateColor = tx.IsFull ? Green : Blue;
                     break;
-                case TransmitterPhase.Settling: state = GameText.Get("settle.settling"); stateColor = Green; break;
-                default: state = GameText.Get("settle.done"); break;
+                case TransmitterPhase.Transmitting: state = GameText.Get("transmitter.firing"); stateColor = Green; break;
+                default: state = GameText.Get("transmitter.done"); stateColor = Dim; break;
             }
             var reached = value >= goal;
             var w = FaceSize.x * PixelsPerMetre - 28f;
@@ -78,10 +73,11 @@ namespace CoOpHorror.Gameplay
             {
                 status[i].text = state;
                 status[i].color = stateColor;
-                sockets[i].text = GameText.Format("settle.sockets", tx.IsSpawned ? tx.PluggedCount : 0, tx.Required);
                 target[i].text = GameText.Format("settle.target", goal);
-                plugged[i].text = GameText.Format("settle.plugged", value);
-                plugged[i].color = reached ? Green : Color.Lerp(Dim, Green, 0.6f);
+                stored[i].text = reached
+                    ? GameText.Format("settle.exchange", StageDirector.Instance != null && StageDirector.Instance.IsSpawned ? StageDirector.Instance.Money.Value : 0)
+                    : GameText.Format("settle.stored", value);
+                stored[i].color = reached ? Green : Color.Lerp(Dim, Green, 0.6f);
                 bars[i].sizeDelta = new Vector2(w * Mathf.Clamp01(value / (float)goal), bars[i].sizeDelta.y);
                 barImages[i].color = reached ? Green : Amber;
             }

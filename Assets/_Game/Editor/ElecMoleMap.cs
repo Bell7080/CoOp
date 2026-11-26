@@ -46,13 +46,13 @@ namespace CoOpHorror.Editor
             public static readonly Vector3 Min = new(-26f, 0f, -23f);
             public static readonly Vector3 Max = new(-18f, 0f, -15f);
             public static readonly Vector3 Door = new(-18f, 0f, -19f);
-            public static readonly Vector3 Generator = new(-24.7f, 0f, -21.4f);
             public static readonly Vector3 Panel = new(-21.2f, 0f, -22.35f);
             public static readonly Vector3 Launch = new(-25.2f, 0f, -15.8f);
             public static readonly Vector3 Spawn = new(-21.5f, 1.05f, -18.4f);
+            // the final power transmitter, against the north hull in the middle (faces into the cabin)
+            public static readonly Vector3 Transmitter = new(-22f, 0f, -15.62f);
         }
 
-        private static readonly Vector3 TransmitterPosition = new(32f, 0f, 24f);
 
         private readonly struct CameraDef
         {
@@ -91,8 +91,7 @@ namespace CoOpHorror.Editor
             {
                 var c = room.Center;
                 var size = new Vector3(XCols[room.Col + 1] - XCols[room.Col], 0.5f, ZRows[room.Row + 1] - ZRows[room.Row]);
-                if (room.Kind == RoomKind.TransmitterRoom) FloorWithShaft(map, room, size);
-                else Box(map, "Floor_" + room.Kind, new Vector3(c.x, -0.25f, c.z), size, FloorMaterial(room.Kind));
+                Box(map, "Floor_" + room.Kind, new Vector3(c.x, -0.25f, c.z), size, FloorMaterial(room.Kind));
                 // solid (collider kept): nothing - players, monsters, lifted appliances - goes out through the roof.
                 // Ceilings are not under the map root, so they stay out of the NavMesh bake.
                 Box(ceilings, "Ceiling_" + room.Kind, new Vector3(c.x, WallHeight + 0.15f, c.z), new Vector3(size.x, 0.3f, size.z), ceiling);
@@ -135,32 +134,6 @@ namespace CoOpHorror.Editor
             CullBlocked(map.Find("Clutter"));
             emergencyLights = emergency.ToArray();
             return map;
-        }
-
-        public const float TransmitterPitHalf = 2.5f;
-
-        // The settlement room's floor has a 5 x 5 m hole under the lift (covered by the lift's hatch and ground
-        // slabs until they cave in) above a 25 m shaft: falling in is a death.
-        private static void FloorWithShaft(Transform map, RoomDef room, Vector3 size)
-        {
-            var mat = FloorMaterial(room.Kind);
-            float x0 = XCols[room.Col], x1 = XCols[room.Col + 1], z0 = ZRows[room.Row], z1 = ZRows[room.Row + 1];
-            float hx0 = TransmitterPosition.x - TransmitterPitHalf, hx1 = TransmitterPosition.x + TransmitterPitHalf;
-            float hz0 = TransmitterPosition.z - TransmitterPitHalf, hz1 = TransmitterPosition.z + TransmitterPitHalf;
-            void Piece(string n, float xa, float xb, float za, float zb) =>
-                Box(map, n, new Vector3((xa + xb) / 2f, -0.25f, (za + zb) / 2f), new Vector3(xb - xa, 0.5f, zb - za), mat);
-            Piece("Floor_" + room.Kind + "_S", x0, x1, z0, hz0);
-            Piece("Floor_" + room.Kind + "_N", x0, x1, hz1, z1);
-            Piece("Floor_" + room.Kind + "_W", x0, hx0, hz0, hz1);
-            Piece("Floor_" + room.Kind + "_E", hx1, x1, hz0, hz1);
-            // rough shaft walls and a floor far below
-            var rock = Mat("ShaftRock", new Color(0.28f, 0.26f, 0.24f), tex: Texture("Concrete"), tiling: 3f, tilingY: 12f);
-            const float depth = 26f;
-            Box(map, "ShaftWall", new Vector3(TransmitterPosition.x, -depth / 2f, hz0 - 0.2f), new Vector3(TransmitterPitHalf * 2f + 0.8f, depth, 0.4f), rock);
-            Box(map, "ShaftWall", new Vector3(TransmitterPosition.x, -depth / 2f, hz1 + 0.2f), new Vector3(TransmitterPitHalf * 2f + 0.8f, depth, 0.4f), rock);
-            Box(map, "ShaftWall", new Vector3(hx0 - 0.2f, -depth / 2f, TransmitterPosition.z), new Vector3(0.4f, depth, TransmitterPitHalf * 2f), rock);
-            Box(map, "ShaftWall", new Vector3(hx1 + 0.2f, -depth / 2f, TransmitterPosition.z), new Vector3(0.4f, depth, TransmitterPitHalf * 2f), rock);
-            Box(map, "ShaftBottom", new Vector3(TransmitterPosition.x, -depth - 0.25f, TransmitterPosition.z), new Vector3(TransmitterPitHalf * 2f, 0.5f, TransmitterPitHalf * 2f), rock);
         }
 
         private static Material FloorMaterial(RoomKind kind)
@@ -328,7 +301,6 @@ namespace CoOpHorror.Editor
         {
             var hull = Mat("ShipHull", new Color(0.42f, 0.45f, 0.5f), tex: Texture("Metal"), tiling: 3f, tilingY: 1f);
             var dark = Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f));
-            var screen = Mat("Screen", new Color(0.05f, 0.25f, 0.2f), unlit: true);
             float w = Ship.Min.x, e = Ship.Max.x, so = Ship.Min.z, n = Ship.Max.z;
             float cx = (w + e) / 2f, cz = (so + n) / 2f, depth = n - so, width = e - w;
             // Solid hull walls close the cabin in (west, south, north); the east side is the cell wall with the door.
@@ -343,13 +315,7 @@ namespace CoOpHorror.Editor
                 Shape(root, "RibN", PrimitiveType.Cube, new Vector3(x, 2f, n - 0.1f), Vector3.zero, new Vector3(0.3f, 4f, 0.2f), dark);
                 Shape(root, "RibTop", PrimitiveType.Cube, new Vector3(x, 3.75f, cz), Vector3.zero, new Vector3(0.3f, 0.25f, depth), dark);
             }
-            for (var x = w + 4f; x <= e - 1.9f; x += 3f) // small cabin: one or two consoles along the north wall
-            {
-                var console = Group(root, "Console", new Vector3(x, 0f, n - 0.5f), 0f);
-                Box(console, "Body", new Vector3(0f, 0.55f, 0f), new Vector3(2.2f, 1.1f, 0.8f), Mat("Console", new Color(0.18f, 0.2f, 0.24f), tex: Texture("Metal"), tiling: 1f));
-                if (PropModel(ShipProp("ShipConsole")) != null) Dressed(console, ShipProp("ShipConsole"), Vector3.zero, new Vector3(2.2f, 1.1f, 0.8f), 180f, true);
-                else Shape(console, "ConsoleScreen", PrimitiveType.Cube, new Vector3(0f, 1.3f, -0.25f), new Vector3(-25f, 0f, 0f), new Vector3(1.8f, 0.5f, 0.05f), screen);
-            }
+            // (the north wall's middle is the final power transmitter, built with the gameplay objects)
             Pipe(root, new Vector3(w + 0.3f, 3.4f, n - 1f), new Vector3(w + 0.3f, 3.4f, so + 1f), 0.18f);
             Pipe(root, new Vector3(w + 0.5f, 3.55f, so + 0.35f), new Vector3(e - 1f, 3.55f, so + 0.35f), 0.13f);
             Crate(root, new Vector3(e - 0.8f, 0f, n - 0.8f), 0.8f); // one crate in the corner by the door

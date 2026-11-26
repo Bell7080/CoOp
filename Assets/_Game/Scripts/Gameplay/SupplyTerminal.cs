@@ -10,12 +10,11 @@ namespace CoOpHorror.Gameplay
 {
     // The ship's supply terminal: a touch screen with the shop list (name, price) and the team's money. Aim at a
     // row and left-click to pick it; the screen asks "$40 - 구매하시겠습니까?" with 확인 / 취소 buttons. Confirming
-    // asks the host, which checks range, money and that the supply station is free, takes the money and sends
+    // asks the host, which checks range, the team's money and that the station is free, takes the money and sends
     // the item to the station out in the facility.
     // The money is replicated; which page each player sees is local (everyone taps the screen for themselves).
     public sealed class SupplyTerminal : Interactable
     {
-        public const int StartingCredits = 120;
         public const float MessageSeconds = 2.4f;
         public const float PixelsPerMetre = 500f;
 
@@ -28,7 +27,6 @@ namespace CoOpHorror.Gameplay
         public Transform ScreenRoot;               // UI is built here, facing local -Z of this transform
         public Vector2 ScreenSize = new(0.62f, 0.46f);
 
-        public readonly NetworkVariable<int> Credits = new(StartingCredits);
 
         private sealed class Button
         {
@@ -79,10 +77,8 @@ namespace CoOpHorror.Gameplay
             base.OnDestroy();
         }
 
-        public override void OnNetworkSpawn()
-        {
-            if (IsServer) Credits.Value = StartingCredits;
-        }
+        // Purchases are paid with the team's money (power exchanged at the transmitter).
+        private static int Money => StageDirector.Instance != null && StageDirector.Instance.IsSpawned ? StageDirector.Instance.Money.Value : 0;
 
         private void Start() => BuildScreen();
 
@@ -122,9 +118,10 @@ namespace CoOpHorror.Gameplay
             var item = SupplyStation.Catalog[index];
             if (!station.Available(item)) return BuyResult.Busy;
             var price = SupplyStation.Price(item);
-            if (Credits.Value < price) return BuyResult.NoMoney;
+            var stage = StageDirector.Instance;
+            if (stage == null || stage.Money.Value < price) return BuyResult.NoMoney;
             if (!station.ServerRequest(item)) return BuyResult.Busy;
-            Credits.Value -= price;
+            stage.ServerSpend(price);
             ProtoAudio.Play(ProtoSound.Click, transform.position + Vector3.up, 1f);
             return BuyResult.Ok;
         }
@@ -158,7 +155,7 @@ namespace CoOpHorror.Gameplay
         private void Confirm()
         {
             var price = SupplyStation.Price(SupplyStation.Catalog[selected]);
-            if (Credits.Value < price) { ShowMessage(GameText.Get("shop.noMoney"), true); return; }
+            if (Money < price) { ShowMessage(GameText.Get("shop.noMoney"), true); return; }
             ShowMessage(GameText.Get("shop.ordering"), false);
             messageUntil = Time.time + 10f; // until the host answers
             BuyRpc(selected);
@@ -245,7 +242,7 @@ namespace CoOpHorror.Gameplay
 
         private void Refresh()
         {
-            creditsText.text = GameText.Format("shop.credits", IsSpawned ? Credits.Value : StartingCredits);
+            creditsText.text = GameText.Format("shop.credits", Money);
             listPage.SetActive(page == Page.List);
             confirmPage.SetActive(page == Page.Confirm);
             messagePage.SetActive(page == Page.Message);
@@ -328,7 +325,7 @@ namespace CoOpHorror.Gameplay
             var w = ScreenSize.x * PixelsPerMetre;
             var h = ScreenSize.y * PixelsPerMetre;
 
-            // header: shop name and the money
+            // header: shop name and the team's money
             Label(canvasRect, "Title", new Rect(10, 6, w - 20, 26), 17, TextAnchor.MiddleLeft, Green).text = GameText.Get("shop.title");
             creditsText = Label(canvasRect, "Credits", new Rect(10, 6, w - 20, 26), 17, TextAnchor.MiddleRight, Amber);
             Block(canvasRect, "Rule", new Rect(8, 34, w - 16, 2), Dim);

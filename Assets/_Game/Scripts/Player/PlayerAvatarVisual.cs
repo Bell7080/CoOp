@@ -13,6 +13,7 @@ namespace CoOpHorror.Player
         public Renderer[] Skin;         // tinted with the player's colour
         public Renderer[] Details;      // eyes, blush: own colours
         public Renderer[] Nose;         // the player's colour, muted
+        public Renderer FirstPersonArms; // the body's own arms cut out of its mesh, shown to the owner only
         public Transform AimPivot;
         public Transform LeftFist;      // paws
         public Transform RightFist;
@@ -53,13 +54,20 @@ namespace CoOpHorror.Player
             bodyColor = Palette[(int)(ownerId % (ulong)Palette.Length)];
             handColor = bodyColor; // the first-person hands are the body's own arms
             var grey = bodyColor.grayscale;
-            noseColor = Color.Lerp(bodyColor, new Color(grey, grey, grey), 0.5f) * 0.9f;
+            noseColor = bodyColor; // one nose, the same skin as the head it grows from (no colour break)
             noseColor.a = 1f;
-            // In first person you only see your paws; the body still casts a shadow.
+            // First person shows the real model's own nose and arms (the arms are the body's triangles skinned
+            // to the arm bones, so they move exactly as the body does); the rest of the body only casts its
+            // shadow, because from inside the head the scanned mesh shows its inside.
             var mode = ownerView ? ShadowCastingMode.ShadowsOnly : ShadowCastingMode.On;
             if (Skin != null) foreach (var r in Skin) if (r != null) r.shadowCastingMode = mode;
             if (Details != null) foreach (var r in Details) if (r != null) r.shadowCastingMode = mode;
-            if (Nose != null) foreach (var r in Nose) if (r != null) r.shadowCastingMode = mode;
+            if (Nose != null) foreach (var r in Nose) if (r != null) r.shadowCastingMode = BodyRoot != null ? ShadowCastingMode.On : mode;
+            if (FirstPersonArms != null)
+            {
+                FirstPersonArms.enabled = ownerView;
+                FirstPersonArms.shadowCastingMode = ShadowCastingMode.Off;
+            }
             if (BodyRoot == null)
             {
                 if (Body != null) Body.shadowCastingMode = mode;
@@ -72,18 +80,25 @@ namespace CoOpHorror.Player
         public void SetDead(bool dead)
         {
             foreach (var r in GetComponentsInChildren<Renderer>(true)) r.enabled = !dead;
+            if (FirstPersonArms != null) FirstPersonArms.enabled = !dead && isOwnerView;
             if (!dead) ShowPaws(true);
         }
 
-        // The first-person paws only exist for their owner; other players see the rigged body's own arms.
+        // The old stand-in first-person paws: only for the primitive fallback body (the rigged model shows its
+        // own arms in first person too).
         private void ShowPaws(bool alive)
         {
             foreach (var paw in new[] { LeftFist, RightFist })
                 if (paw != null)
-                    foreach (var r in paw.GetComponentsInChildren<Renderer>(true)) r.enabled = alive && (isOwnerView || BodyRoot == null);
+                    foreach (var r in paw.GetComponentsInChildren<Renderer>(true)) r.enabled = alive && BodyRoot == null;
         }
 
         public void Flash() => flashUntil = Time.time + 0.18f;
+
+        public Color NoseColor => noseColor;
+
+        // While power flows through the nose (PlayerNose) it glows in this colour, pulsing.
+        public Color? NoseFlowTint { get; set; }
 
         private void Update()
         {
@@ -104,18 +119,20 @@ namespace CoOpHorror.Player
             if (motor != null && motor.IsSpawned && motor.Crouched.Value) target = Crouched;
             else
             {
-                var stretch = Mathf.Clamp(velocity.y * 0.002f, -0.014f, 0.014f);
-                var wobble = Mathf.Sin(Time.time * 8f) * 0.0015f * Mathf.Clamp01(flat / 4f);
-                var jolt = Mathf.Clamp01(new Vector2(smoothedAccel.x, smoothedAccel.z).magnitude / 30f) * 0.012f;
+                // firm jelly: it keeps its shape, only a hint of give
+                // firm, viscous jelly: the body keeps its shape while moving (only crouching squeezes it)
+                var stretch = 0f;
+                var wobble = 0f;
+                var jolt = 0f;
                 target = new Vector3(1f - stretch * 0.5f - wobble + jolt, 1f + stretch + wobble - jolt, 1f - stretch * 0.5f - wobble + jolt);
             }
-            squash = Vector3.SmoothDamp(squash, target, ref squashVelocity, 0.08f, 40f, dt);
+            squash = Vector3.SmoothDamp(squash, target, ref squashVelocity, 0.05f, 40f, dt);
             BodyRoot.localScale = squash;
 
             // Lean away from the acceleration (start, stop, sidestep, turn), damped spring back.
             var localAccel = transform.InverseTransformDirection(new Vector3(smoothedAccel.x, 0f, smoothedAccel.z));
-            var leanTarget = new Vector3(Mathf.Clamp(-localAccel.z * 0.09f, -2.5f, 2.5f), 0f, Mathf.Clamp(localAccel.x * 0.09f, -2.5f, 2.5f));
-            lean = Vector3.SmoothDamp(lean, leanTarget, ref leanVelocity, 0.12f, 200f, dt);
+            var leanTarget = new Vector3(Mathf.Clamp(-localAccel.z * 0.015f, -0.5f, 0.5f), 0f, Mathf.Clamp(localAccel.x * 0.015f, -0.5f, 0.5f));
+            lean = Vector3.SmoothDamp(lean, leanTarget, ref leanVelocity, 0.08f, 200f, dt);
             BodyRoot.localRotation = Quaternion.Euler(lean.x, 0f, lean.z);
         }
 
@@ -125,7 +142,10 @@ namespace CoOpHorror.Player
             var red = new Color(1f, 0.15f, 0.1f);
             var skin = flashing ? red : bodyColor;
             if (Skin != null) foreach (var r in Skin) Tint(r, skin);
-            if (Nose != null) foreach (var r in Nose) Tint(r, flashing ? red : noseColor);
+            Tint(FirstPersonArms, skin);
+            var nose = noseColor;
+            if (NoseFlowTint.HasValue) nose = Color.Lerp(noseColor, NoseFlowTint.Value, 0.35f + 0.25f * Mathf.Sin(Time.time * 18f));
+            if (Nose != null) foreach (var r in Nose) Tint(r, flashing ? red : nose);
             if (BodyRoot == null)
             {
                 Tint(Body, skin);

@@ -6,7 +6,9 @@ namespace CoOpHorror.Gameplay
 {
     public enum StagePhase : byte { Exploring, Blackout, Launching, Escaped, Defeat }
 
-    // Host-owned stage flow: exploration -> blackout (transmitter gone) -> launch countdown -> escape.
+    // Host-owned stage flow: exploration (fill the transmitter; once it is full the launch button works and the
+    // surplus can be exchanged for money) -> launch pressed: the transmitter fires, the facility blacks out and
+    // the countdown runs -> escape. (StagePhase.Blackout is no longer entered; kept for the enum's order.)
     // Everyone dead at any point is a defeat. Players left outside when the ship leaves lose their link to the
     // ship's power and slowly die. Every peer applies the matching lighting from the replicated phase.
     public sealed class StageDirector : NetworkBehaviour
@@ -29,7 +31,26 @@ namespace CoOpHorror.Gameplay
         public readonly NetworkVariable<StagePhase> Phase = new(StagePhase.Exploring);
         public readonly NetworkVariable<double> LaunchAt = new(0d);
         public readonly NetworkVariable<double> IntroStart = new(0d);   // crash-landing opening (CrashIntro)
-        public readonly NetworkVariable<int> Earned = new(0);          // settlement value of this stage
+        public readonly NetworkVariable<int> Earned = new(0);          // watts sent by the transmitter this stage
+        // Stage number of the run (1 = first). Later stages drain faster (PlayerNose.SuckRate). There is no
+        // stage-to-stage flow yet: a new room starts at 1 and the dev tools can raise it for testing.
+        public readonly NetworkVariable<int> Level = new(1);
+        // The team's money: power pumped into the transmitter beyond its cap, and whatever is left in the tanks
+        // of the players aboard when the ship leaves, exchanged at WattsPerDollar. Spent at the supply terminal.
+        public const int WattsPerDollar = 10;
+        public readonly NetworkVariable<int> Money = new(0);
+
+        public void ServerAddMoney(int dollars)
+        {
+            if (IsServer && dollars > 0) Money.Value += dollars;
+        }
+
+        public bool ServerSpend(int dollars)
+        {
+            if (!IsServer || dollars < 0 || Money.Value < dollars) return false;
+            Money.Value -= dollars;
+            return true;
+        }
         public NetworkList<ulong> Aboard; // OwnerClientIds inside the ship when it left
 
         private float[] roomIntensity;
@@ -67,6 +88,8 @@ namespace CoOpHorror.Gameplay
             IntroStart.Value = NetworkManager.ServerTime.Time + 0.5d;
             LaunchAt.Value = 0d;
             Earned.Value = 0;
+            Level.Value = 1;
+            Money.Value = 0;
             Aboard.Clear();
         }
 
@@ -89,24 +112,22 @@ namespace CoOpHorror.Gameplay
         public bool IsLeftBehind(PlayerHealth player) =>
             IsSpawned && Phase.Value == StagePhase.Escaped && player != null && !IsAboard(player.OwnerClientId);
 
-        // Transmitter is gone: every appliance and fixture (CCTV, lamps) loses its power and the map goes dark.
-        public void ServerBlackout()
+        // The transmitter fired: every appliance and fixture (CCTV, lamps) loses its power and the map goes dark.
+        private void ServerDischargeAll()
         {
-            if (!IsServer || Phase.Value != StagePhase.Exploring) return;
             foreach (var appliance in Appliance.All) if (appliance.IsSpawned) appliance.ServerDischarge();
             foreach (var device in InstalledDevice.Devices) if (device.IsSpawned) device.ServerDischarge();
-            Phase.Value = StagePhase.Blackout;
         }
 
-        // Server: the settlement value is fixed when the transmitter has swallowed everything.
-        public void ServerRecordEarnings(int value)
-        {
-            if (IsServer) Earned.Value = value;
-        }
+        // The launch button works once the transmitter holds its required power.
+        public bool LaunchReady => IsSpawned && Phase.Value == StagePhase.Exploring && Transmitter.Instance != null && Transmitter.Instance.IsFull;
 
+        // Launch pressed: the transmitter fires, the facility blacks out, the countdown starts.
         public bool ServerArmLaunch()
         {
-            if (!IsServer || Phase.Value != StagePhase.Blackout) return false;
+            if (!IsServer || !LaunchReady) return false;
+            Transmitter.Instance.ServerFire();
+            ServerDischargeAll();
             LaunchAt.Value = NetTime + LaunchWait;
             Phase.Value = StagePhase.Launching;
             return true;
@@ -179,6 +200,18 @@ namespace CoOpHorror.Gameplay
                 aliveAboard++;
             }
             if (ShipDoor != null) ShipDoor.ServerClose();
+            // Settlement: what the transmitter sent plus the power the survivors carry in their tanks; the
+            // tanks are also exchanged for money.
+            var earned = Transmitter.Instance != null ? Transmitter.Instance.StoredWatts : 0;
+            foreach (var p in PlayerHealth.All)
+                if (p != null && p.IsSpawned && IsAboard(p.OwnerClientId) && p.TryGetComponent<PlayerNose>(out var tank))
+                {
+                    earned += Mathf.FloorToInt(tank.Energy.Value);
+                    ServerAddMoney(Mathf.FloorToInt(tank.Energy.Value / WattsPerDollar));
+                    tank.ServerTake(tank.Energy.Value);
+                }
+            Earned.Value = earned;
+            if (Transmitter.Instance != null) Transmitter.Instance.ServerFinish();
             Phase.Value = aliveAboard > 0 ? StagePhase.Escaped : StagePhase.Defeat;
             Debug.Log($"[ElecMole] Ship left with {aliveAboard} living player(s) aboard");
         }

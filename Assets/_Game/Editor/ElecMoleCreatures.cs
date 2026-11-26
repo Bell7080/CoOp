@@ -300,10 +300,14 @@ namespace CoOpHorror.Editor
                 rig.ClipSpeedPerMetre = 0.4f;
                 rig.Floppy = new[]
                 {
-                    new RigAnimator.FloppyChain { Bones = Bones(model, "Nose1", "Nose2", "Nose3"), Stiffness = 120f, Damping = 13f, Gravity = 1f },
-                    new RigAnimator.FloppyChain { Bones = Bones(model, "ArmL1", "ArmL2"), Stiffness = 100f, Damping = 12f, Gravity = 1.5f },
-                    new RigAnimator.FloppyChain { Bones = Bones(model, "ArmR1", "ArmR2"), Stiffness = 100f, Damping = 12f, Gravity = 1.5f },
+                    // firm jelly: springs stiff and well damped (a little lag, no wobbling about)
+                    // viscous: over-damped springs (a slow, thick lag, never a bounce)
+                    new RigAnimator.FloppyChain { Bones = Bones(model, "Nose1", "Nose2", "Nose3"), Stiffness = 220f, Damping = 42f, Gravity = 0f },
+                    new RigAnimator.FloppyChain { Bones = Bones(model, "ArmL1", "ArmL2"), Stiffness = 200f, Damping = 40f, Gravity = 0.3f },
+                    new RigAnimator.FloppyChain { Bones = Bones(model, "ArmR1", "ArmR2"), Stiffness = 200f, Damping = 40f, Gravity = 0.3f },
                 };
+                // the nose gets a deep chain of bones so it can really stretch (ElecMoleNoseRig)
+                DeepRigNose(root, model.transform);
             }
             Renderer Part(string n, PrimitiveType t, Vector3 p, Vector3 s, Material m, bool isSkin)
             {

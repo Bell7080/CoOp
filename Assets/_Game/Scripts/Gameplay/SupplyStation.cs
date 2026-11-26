@@ -6,8 +6,8 @@ using UnityEngine;
 namespace CoOpHorror.Gameplay
 {
     public enum SupplyPhase : byte { Idle, Incoming, Open }
-    public enum SupplyItem : byte { Medkit, Adrenaline, Tap2, Tap3, Tap5, Tap8 }
-    public enum SupplyCategory : byte { Medical, Power }
+    public enum SupplyItem : byte { Medkit, Adrenaline }
+    public enum SupplyCategory : byte { Medical }
 
     // Item support station: a drop box out in the facility. Someone in the ship buys an item on the ship's
     // supply terminal (paid with the team's money); a few seconds later the box's beacon spins, its hatch flips up
@@ -20,65 +20,35 @@ namespace CoOpHorror.Gameplay
         public const int MedkitHeal = 40;
         public const float AdrenalineSeconds = 20f;
 
-        // What the ship's supply terminal sells, in list order, and the prices in dollars (team money).
-        public static readonly SupplyItem[] Catalog =
-            { SupplyItem.Medkit, SupplyItem.Adrenaline, SupplyItem.Tap2, SupplyItem.Tap3, SupplyItem.Tap5, SupplyItem.Tap8 };
+        // What the ship's supply terminal sells, in list order, and the prices in dollars (the team's money,
+        // exchanged from surplus power at the transmitter).
+        public static readonly SupplyItem[] Catalog = { SupplyItem.Medkit, SupplyItem.Adrenaline };
 
         public static int Price(SupplyItem item) => item switch
         {
             SupplyItem.Medkit => 40,
-            SupplyItem.Adrenaline => 25,
-            SupplyItem.Tap2 => 20,
-            SupplyItem.Tap3 => 35,
-            SupplyItem.Tap5 => 60,
-            _ => 100,
+            _ => 25,
         };
 
         public static string NameKey(SupplyItem item) => item switch
         {
             SupplyItem.Medkit => "supply.medkit",
-            SupplyItem.Adrenaline => "supply.adrenaline",
-            _ => "appliance.multitap" + Outlets(item),
+            _ => "supply.adrenaline",
         };
 
         public static string EffectKey(SupplyItem item) => item switch
         {
             SupplyItem.Medkit => "hover.medkitEffect",
-            SupplyItem.Adrenaline => "hover.adrenalineEffect",
-            _ => "hover.multitapEffect",
+            _ => "hover.adrenalineEffect",
         };
 
         // The terminal's tabs, in order, and which tab each item is listed under.
-        public static readonly SupplyCategory[] Categories = { SupplyCategory.Medical, SupplyCategory.Power };
-        public static SupplyCategory Category(SupplyItem item) => Outlets(item) > 0 ? SupplyCategory.Power : SupplyCategory.Medical;
-        public static string CategoryKey(SupplyCategory category) => category == SupplyCategory.Power ? "shop.tabPower" : "shop.tabMedical";
+        public static readonly SupplyCategory[] Categories = { SupplyCategory.Medical };
+        public static SupplyCategory Category(SupplyItem item) => SupplyCategory.Medical;
+        public static string CategoryKey(SupplyCategory category) => "shop.tabMedical";
 
-        // Power strips: how many outlets (0 for the other items).
-        public static int Outlets(SupplyItem item) => item switch
-        {
-            SupplyItem.Tap2 => 2,
-            SupplyItem.Tap3 => 3,
-            SupplyItem.Tap5 => 5,
-            SupplyItem.Tap8 => 8,
-            _ => 0,
-        };
-
-        // Power strips are real objects waiting hidden in the scene (a few of each size); one is revealed in
-        // front of the station when it is collected. Sold out once they are all out.
-        public Appliance[] TapPool;
-        public GameObject ParcelModel;     // what sits on the tray for a power strip delivery
-
-        private Appliance FreeTap(SupplyItem item)
-        {
-            var outlets = Outlets(item);
-            if (outlets == 0 || TapPool == null) return null;
-            foreach (var tap in TapPool)
-                if (tap != null && tap.IsSpawned && tap.Outlets != null && tap.Outlets.Length == outlets && !tap.Revealed.Value) return tap;
-            return null;
-        }
-
-        // Can this be ordered now (a power strip of that size still left)?
-        public bool Available(SupplyItem item) => Outlets(item) == 0 || FreeTap(item) != null;
+        // Can this be ordered now?
+        public bool Available(SupplyItem item) => true;
 
         public static SupplyStation Instance { get; private set; }
 
@@ -156,15 +126,7 @@ namespace CoOpHorror.Gameplay
         public override void ServerUse(PlayerInteractor who)
         {
             if (Phase.Value != SupplyPhase.Open) return;
-            if (Outlets(Item.Value) > 0)
-            {
-                // the power strip comes out of the hatch and drops in front of the station
-                var tap = FreeTap(Item.Value);
-                if (tap == null) return;
-                var front = transform.position + transform.forward * 0.9f + Vector3.up * 1.0f;
-                tap.ServerReveal(new Pose(front, Quaternion.LookRotation(transform.right, Vector3.up)));
-            }
-            else if (Item.Value == SupplyItem.Medkit)
+            if (Item.Value == SupplyItem.Medkit)
             {
                 var health = who.GetComponent<PlayerHealth>();
                 if (health == null || health.IsDead.Value || health.Health.Value >= PlayerHealth.MaxHealth) return;
@@ -199,7 +161,6 @@ namespace CoOpHorror.Gameplay
             var showItem = phase == SupplyPhase.Open || open > 0.01f && phase != SupplyPhase.Idle;
             if (MedkitModel != null) MedkitModel.SetActive(showItem && Item.Value == SupplyItem.Medkit);
             if (AdrenalineModel != null) AdrenalineModel.SetActive(showItem && Item.Value == SupplyItem.Adrenaline);
-            if (ParcelModel != null) ParcelModel.SetActive(showItem && Outlets(Item.Value) > 0);
 
             // beeping and a spinning amber beacon while the drop is on its way
             if (phase == SupplyPhase.Incoming && Time.time >= nextBeep)
