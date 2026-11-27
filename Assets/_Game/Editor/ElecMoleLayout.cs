@@ -14,7 +14,7 @@ namespace CoOpHorror.Editor
         public const int LayoutSeed = 7080;
         private const int CellSize = 18;
 
-        private enum Pattern { Open, Corridor, Island, Pillars, PartitionX, PartitionZ, CornerSW, CornerSE, CornerNW, CornerNE }
+        private enum Pattern { Open, Corridor, Island, Pillars, PartitionX, PartitionZ, CornerSW, CornerSE, CornerNW, CornerNE, Planned }
 
         // Doorways closed off to shape the corridors (edges between two cells).
         private static readonly Vector3[] ClosedDoorways =
@@ -35,9 +35,10 @@ namespace CoOpHorror.Editor
         // stand under the appliance (OnStand), so the clutter keeps clear of them.
         private static readonly Vector3[] AppliancePositions =
         {
-            new(-30f, 0f, 6f), new(14.2f, 0.95f, 9.15f), new(-22f, 0f, 25f), new(-9f, 0f, 6f),
-            new(12.2f, 0.95f, 9.15f), new(16.2f, 0.95f, 9.15f), new(12f, 0f, -19.6f),
-            new(-31f, 0f, -9.3f), // the fan crawler's side table (ElecMoleCreatures.FanCrawlerTable)
+            DormTvStand, new(14.2f, 0.95f, 9.15f), OfficeRadioShelf, OfficeDeskFan,
+            new(12.2f, 0.95f, 9.15f), new(16.2f, 0.95f, 9.15f), BreakroomRiceCooker,
+            DormSofa, // the dorm sofa facing the TV (ElecMoleMap)
+            new(-28.5f, 0f, -9.3f), // the fan crawler's side table (ElecMoleCreatures.FanCrawlerTable)
         };
         private static readonly Vector3[] WardrobeFronts =
         {
@@ -76,6 +77,15 @@ namespace CoOpHorror.Editor
         // every gameplay spot, every doorway approach and every piece of furniture in open floor.
         private static void ChooseRoomPattern(RoomDef room, Transform furniture)
         {
+            // rooms with a drawn floor plan (ElecMoleRoomPlans) take it as it is
+            if (RoomPlans.TryGetValue(room.Kind, out var plan))
+            {
+                var planned = PlanMask(room, plan);
+                CheckPlan(room, planned, furniture);
+                Walk[room.Kind] = planned;
+                Patterns[room.Kind] = Pattern.Planned;
+                return;
+            }
             var options = new List<Pattern> { Pattern.Island, Pattern.Pillars, Pattern.PartitionX, Pattern.PartitionZ };
             // an L-shaped room (one corner walled off) as the fallback family
             var corners = new List<Pattern> { Pattern.CornerSW, Pattern.CornerSE, Pattern.CornerNW, Pattern.CornerNE };
@@ -218,6 +228,11 @@ namespace CoOpHorror.Editor
             var c = room.Center;
             float x0 = XCols[room.Col], z0 = ZRows[room.Row];
             Patterns.TryGetValue(room.Kind, out var pattern);
+            if (pattern == Pattern.Planned && RoomPlans.TryGetValue(room.Kind, out var plan))
+            {
+                foreach (var lamp in plan.Lamps) yield return NearestWalkable(new Vector3(x0 + lamp.x, 0f, z0 + lamp.y));
+                yield break;
+            }
             switch (pattern)
             {
                 case Pattern.PartitionX: // wall along X across the room: south and north halves
@@ -283,6 +298,7 @@ namespace CoOpHorror.Editor
             var plaster = Mat("WallPlaster", new Color(0.62f, 0.6f, 0.55f), tex: Texture("Wallpaper"), tiling: 6f, tilingY: 1.5f);
             var mask = Walk[room.Kind];
             float x0 = XCols[room.Col], z0 = ZRows[room.Row];
+            if (pattern == Pattern.Planned) { BuildPlanWalls(parent, room, RoomPlans[room.Kind], plaster); return; }
             switch (pattern)
             {
                 case Pattern.Island:

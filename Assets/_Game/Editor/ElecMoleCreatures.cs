@@ -37,7 +37,7 @@ namespace CoOpHorror.Editor
             DisguiseAsDeskFan(fan, FanCrawlerYaw);
         }
 
-        private static readonly Vector3 FanCrawlerTable = new(-31f, 0f, -9.3f); // dorm, against the south wall (clear of the beds)
+        private static readonly Vector3 FanCrawlerTable = new(-28.5f, 0f, -9.3f); // dorm living room, against the south wall beside the TV corner
         private const float FanCrawlerYaw = 0f;                                   // facing into the room (north)
 
         // The battery a creature drops when its power is drained to nothing (hidden until then; drink only).
@@ -62,7 +62,7 @@ namespace CoOpHorror.Editor
         // The look of the appliance fan (BuildFan) on the creature, shown while it is disguised.
         private static void DisguiseAsDeskFan(TempMonster fan, float yaw)
         {
-            const float scale = 0.55f; // same size as the real fan on its side table
+            const float scale = DeskFanScale; // same size as the real desk fan
             var root = fan.transform;
             root.rotation = Quaternion.Euler(0f, yaw, 0f);
             var disguise = new GameObject("Disguise").transform;

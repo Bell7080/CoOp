@@ -8,4 +8,5 @@
 - `FormerResources/Audio/ElevenLabs/`: 플러그 꽂기/뽑기, 발전기 크랭크 효과음 (`ProtoSound`에서 제거, Resources 밖이라 빌드에 포함되지 않음)
 - `RemovedScripts~/`: 앞선 작업에서 지운 스크립트(CordPlug, Generator, PowerGrid, PlayerInventory) 원본. 폴더 이름이 `~`로 끝나 Unity가 가져오거나 컴파일하지 않습니다.
 - `Art/Characters/ClockSpider_Handmade~/`: Tripo 모델로 바꾸기 전에 Blender로 직접 만든 다리 8개짜리 시계 거미(FBX, 텍스처, .blend). 만든 스크립트는 `RemovedScripts~/tools/blender/`(make_clockspider.py, paint_clockspider.py, cfg_clockspider_handmade.py). 폴더 이름이 `~`로 끝나 Unity가 가져오지 않습니다.
+- `ThirdParty/KenneyFurniture/televisionVintage.fbx`: 탕비실 조리대 위에 장식으로 두던 브라운관 TV(가전이 아닌 가짜 전자제품). TV는 숙소 TV 코너의 진짜 가전만 남겨서 빠졌습니다 (2026-11-28).
 - `KrRiceCooker_beforeHoleFill.fbx~`: 옆·뒷면이 뚫려 있던 밥솥 원본 모델. `tools/blender/fill_prop_holes.py`로 구멍을 메운 버전이 원래 자리에 있습니다. 이름이 `~`로 끝나 Unity가 가져오지 않습니다.
