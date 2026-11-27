@@ -7,22 +7,37 @@ using UnityEngine.AI;
 
 namespace CoOpHorror.Gameplay
 {
+    public enum CreatureKind : byte { Generic, TvWalker, FanCrawler, ClockSpider }
+
+    // Active: the usual brain. Stunned: stopped for a moment (TV after a wall hit, fan after its gust, spider
+    // after being torn off). Dead: its power (health) drained to nothing. Disguised: the fan sitting on a side
+    // table as a desk fan. Latched: the clock spider clinging to a player's back.
+    public enum CreatureMode : byte { Active, Stunned, Dead, Disguised, Latched }
+
     // Monster brain, host only: patrols waypoints on the NavMesh, chases the nearest player it can see,
-    // walks over to loud noises it hears, and body-slams players it touches. Each creature (TV walker,
-    // clock spider, fan crawler...) sets its own speeds, sight and damage. Players squeezed under furniture
-    // are only noticed right next to them. The NavMeshAgent runs on the host only; a server-authority
-    // NetworkTransform replicates it. The root pivot is at the creature's feet.
+    // walks over to noises it hears, and body-slams players it touches. The common brain lives in this file;
+    // each creature's own senses and gimmicks are in TempMonster.Creatures.cs (TV walker: light and a straight
+    // charge; fan crawler: hearing, a floor disguise and a gust; clock spider: an alarm and clinging to backs),
+    // and draining a stunned or sleeping creature with the nose is in TempMonster.Power.cs.
+    // Players squeezed under furniture are only noticed right next to them (the spider excepted). The
+    // NavMeshAgent runs on the host only; a server-authority NetworkTransform replicates it. The root pivot is
+    // at the creature's feet.
     [RequireComponent(typeof(NavMeshAgent))]
-    public sealed class TempMonster : NetworkBehaviour
+    public sealed partial class TempMonster : Interactable, INoseTarget
     {
         public const float TuckedSightRange = 2.2f;
         public const float LoseTargetAfter = 3f;
-        public const float LoseHiddenAfter = 1.2f;  // crouched out of its view or behind cover: gives up fast
-        public const float ViewHalfAngle = 60f;     // what it is looking at; players behind it are not spotted
+        public const float LoseHiddenAfter = 1.2f;  // crouched out of its view, behind cover, or (TV) in the dark: gives up fast
+        public const float ViewHalfAngle = 60f;     // default view cone; each creature's senses may widen it
         public const float SenseRange = 2f;         // right next to it, it notices you whichever way it faces
         public const float LingerAtNoise = 3f;  // seconds spent looking around where it heard something
         public const float AttackCooldown = 1.2f;
         public const float RecognitionSeconds = 0.6f;
+        public const ulong NoVictim = ulong.MaxValue;
+
+        // Which creature this brain drives. Scenes built before this field existed infer it from the object's
+        // name (Creature_TvWalker, Creature_FanCrawler, Creature_ClockSpider).
+        public CreatureKind Kind;
 
         public float PatrolSpeed = 1.8f;
         public float InvestigateSpeed = 2.8f;
@@ -32,7 +47,7 @@ namespace CoOpHorror.Gameplay
         public float AttackRange = 1.6f;
         public int AttackDamage = 20;
         // Lunge / charge: when it sees its target this close it rushes in a burst (fan: face-first jump scare,
-        // TV: head-first ram), then needs a breather. Hits send the player flying.
+        // TV: head-first ram, spider: a leap onto your back), then needs a breather. Hits send the player flying.
         public float LungeRange = 5f;
         public float LungeSpeed = 7f;
         public float LungeSeconds = 0.8f;
@@ -46,16 +61,31 @@ namespace CoOpHorror.Gameplay
         // End-to-end tests freeze the monster so the scripted flow is deterministic (host only).
         public static bool Frozen { get; set; }
         public bool Investigating => investigating;
+        public Vector3 InvestigatePoint => noisePosition;
+        public Vector3 HomePosition => homePosition;
 
         public Transform[] Waypoints;
         public Renderer[] Eyes;
 
+        // The fan crawler starts the stage as an ordinary-looking desk fan on a side table (DisguiseVisual shown,
+        // CreatureVisual hidden, no NavMeshAgent) and only turns into the creature when a nose drinks from it.
+        public bool StartsDisguised;
+        public GameObject DisguiseVisual;
+        public GameObject CreatureVisual;
+
         public readonly NetworkVariable<bool> Chasing = new(false);
         public readonly NetworkVariable<bool> Recognizing = new(false);
+        public readonly NetworkVariable<CreatureMode> Mode = new(CreatureMode.Active);
+        public readonly NetworkVariable<float> Power = new(0f);              // its health, in watts (TempMonster.Power)
+        public readonly NetworkVariable<ulong> LatchedTo = new(NoVictim);   // player object the spider clings to
+        public readonly NetworkVariable<double> LatchEndsAt = new(0d);      // when its alarm goes off (server time)
         private float recognizeUntil;
 
         private NavMeshAgent agent;
         private NetworkTransform sync;
+        private CapsuleCollider body;
+        private float bodyRadius, bodyHeight;
+        private Vector3 bodyCenter;
         private Vector3 homePosition;
         private Quaternion homeRotation;
         private bool resetPending;
@@ -76,12 +106,18 @@ namespace CoOpHorror.Gameplay
         private MaterialPropertyBlock block;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
 
-        private void Awake()
+        protected override void Awake()
         {
+            base.Awake();
             All.Add(this);
+            if (Kind == CreatureKind.Generic) Kind = KindFromName(name);
+            senses = CreatureSenses.For(Kind);
+            senses.Tune(this);
             agent = GetComponent<NavMeshAgent>();
             agent.enabled = false; // host enables it after the spawn teleport
             sync = GetComponent<NetworkTransform>();
+            body = GetComponent<CapsuleCollider>();
+            if (body != null) { bodyRadius = body.radius; bodyHeight = body.height; bodyCenter = body.center; }
             homePosition = transform.position;
             homeRotation = transform.rotation;
             block = new MaterialPropertyBlock();
@@ -96,6 +132,8 @@ namespace CoOpHorror.Gameplay
 
         public override void OnNetworkSpawn()
         {
+            Mode.OnValueChanged += OnModeChanged;
+            OnModeChanged(CreatureMode.Active, Mode.Value);
             if (!IsServer) return;
             target = null;
             investigating = false;
@@ -103,12 +141,14 @@ namespace CoOpHorror.Gameplay
             nextAttack = 0f;
             Chasing.Value = false;
             Recognizing.Value = false;
+            ServerResetCreature(StartsDisguised);
             resetPending = true; // teleport home once the NetworkTransform can commit
             Noise.Server += OnNoise;
         }
 
         public override void OnNetworkDespawn()
         {
+            Mode.OnValueChanged -= OnModeChanged;
             Noise.Server -= OnNoise;
             if (agent != null) agent.enabled = false;
         }
@@ -116,7 +156,13 @@ namespace CoOpHorror.Gameplay
         // End-to-end tests: put the monster somewhere (host only).
         public void ServerTeleport(Vector3 position)
         {
-            if (!IsServer || !IsSpawned || !agent.enabled) return;
+            if (!IsServer || !IsSpawned) return;
+            if (Mode.Value == CreatureMode.Latched) ServerRelease(false, Vector3.zero);
+            if (!agent.enabled)
+            {
+                if (Mode.Value == CreatureMode.Disguised) ServerWake(false); // (drops it to the floor first)
+                if (!agent.enabled) return;
+            }
             agent.Warp(position);
             if (sync != null && sync.CanCommitToTransform) sync.Teleport(transform.position, transform.rotation, transform.localScale);
             investigating = false;
@@ -125,12 +171,31 @@ namespace CoOpHorror.Gameplay
             Chasing.Value = false;
             lungeUntil = 0f;
             nextRepath = 0f;
+            ServerResetCreature(false);
         }
 
-        private void OnNoise(Vector3 position, float radius)
+        // Heard something (a drained appliance crackling, footsteps, a door, a radio, an alarm): walk over to it.
+        // How far it hears depends on the kind of noise and the creature (CreatureSenses). Once there it looks
+        // around and the usual sight check takes over, so whoever made it gets spotted and chased.
+        private void OnNoise(Vector3 position, float radius, NoiseKind kind)
         {
-            if (target != null) return; // already chasing someone
+            var scale = senses.Hearing(kind);
+            if (scale <= 0f) return;
+            radius *= scale;
             if ((position - transform.position).sqrMagnitude > radius * radius) return;
+            if (Mode.Value != CreatureMode.Active || ringUntil > Time.time) return; // (a disguised fan only wakes when drunk from)
+            if (target != null)
+            {
+                // A hunter by ear keeps track of a target who is still making noise (running behind a wall is
+                // not hiding; crouching is silent).
+                if (senses.Persistent && kind != NoiseKind.Drain && kind != NoiseKind.Alarm
+                    && (position - target.transform.position).sqrMagnitude < 9f)
+                {
+                    lastSeenTime = Time.time;
+                    lastSeenPosition = target.transform.position;
+                }
+                return; // already chasing someone
+            }
             investigating = true;
             noisePosition = position;
             lingerUntil = 0f;
@@ -139,6 +204,7 @@ namespace CoOpHorror.Gameplay
         private void Update()
         {
             UpdateEyes();
+            UpdatePeerFx();
             if (!IsServer || !IsSpawned) return;
 
             if (resetPending)
@@ -146,13 +212,21 @@ namespace CoOpHorror.Gameplay
                 if (sync != null && !sync.CanCommitToTransform) return;
                 transform.SetPositionAndRotation(homePosition, homeRotation);
                 if (sync != null) sync.Teleport(homePosition, homeRotation, transform.localScale);
+                resetPending = false;
+                if (Mode.Value == CreatureMode.Disguised) return; // sits on its table until a nose drinks from it
                 agent.enabled = true;
                 agent.Warp(homePosition);
-                resetPending = false;
+            }
+            if (Mode.Value == CreatureMode.Dead) return;
+            if (Mode.Value == CreatureMode.Latched)
+            {
+                if (!Frozen) ServerTickLatched();
+                return;
             }
             if (!agent.enabled || !agent.isOnNavMesh) return;
             agent.isStopped = Frozen;
             if (Frozen) return;
+            if (ServerTickBusy()) return; // stunned, asleep, disguised, ringing, winding up, blowing
 
             if (Time.time >= nextScan)
             {
@@ -173,8 +247,9 @@ namespace CoOpHorror.Gameplay
                     lastSeenPosition = seen.transform.position;
                     investigating = false;
                 }
+                else if (target == null) ServerNoticeBeams();
             }
-            if (target != null && (!target.IsSpawned || target.IsDead.Value || Time.time - lastSeenTime > (targetHidden ? LoseHiddenAfter : LoseTargetAfter)))
+            if (target != null && (!target.IsSpawned || target.IsDead.Value || Time.time - lastSeenTime > (targetHidden ? senses.HiddenGiveUp : LoseTargetAfter)))
             {
                 // Lost them: check where they were last seen before going back to patrol.
                 if (target != null && !target.IsDead.Value) { investigating = true; noisePosition = lastSeenPosition; lingerUntil = 0f; }
@@ -193,21 +268,17 @@ namespace CoOpHorror.Gameplay
             {
                 agent.isStopped = true;
                 agent.velocity = Vector3.zero;
-                var direction = Flat(target.transform.position - transform.position);
-                if (direction.sqrMagnitude > 0.01f)
-                    transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), 180f * Time.deltaTime);
+                FaceTowards(target.transform.position, 180f);
                 return;
             }
+
+            if (ServerTickCharge()) { TryAttack(); return; } // the TV's straight charge steers itself
 
             if (target != null)
             {
                 var gap = (target.transform.position - transform.position).magnitude;
-                if (!Lunging && Time.time >= nextLunge && Time.time - lastSeenTime < 0.3f && gap < LungeRange)
-                {
-                    lungeUntil = Time.time + LungeSeconds;
-                    nextLunge = lungeUntil + LungeCooldown;
-                    LungeFxRpc();
-                }
+                if (!Lunging && Time.time >= nextLunge && Time.time - lastSeenTime < 0.3f && gap < LungeRange) ServerStartLunge();
+                if (windupUntil > 0f) return; // (TV) winding up from the next frame on
                 agent.speed = Lunging ? LungeSpeed : ChaseSpeed;
                 MoveTo(Time.time - lastSeenTime < 0.3f ? target.transform.position : lastSeenPosition);
             }
@@ -222,6 +293,10 @@ namespace CoOpHorror.Gameplay
                     if (Time.time >= lingerUntil) investigating = false;
                 }
             }
+            else if (ServerHoldStill())
+            {
+                // (the fan in the blackout: stays put and only listens)
+            }
             else if (Waypoints != null && Waypoints.Length > 0)
             {
                 agent.speed = PatrolSpeed;
@@ -229,7 +304,8 @@ namespace CoOpHorror.Gameplay
                 if (Arrived(1.2f)) waypoint = (waypoint + 1) % Waypoints.Length;
             }
 
-            TryAttack();
+            if (Mode.Value == CreatureMode.Active) TryAttack();
+            ServerAfterMove();
         }
 
         private void MoveTo(Vector3 goal)
@@ -245,10 +321,29 @@ namespace CoOpHorror.Gameplay
         private bool Arrived(float distance) =>
             !agent.pathPending && agent.remainingDistance <= distance;
 
+        private void FaceTowards(Vector3 point, float degreesPerSecond)
+        {
+            var direction = Flat(point - transform.position);
+            if (direction.sqrMagnitude > 0.01f)
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), degreesPerSecond * Time.deltaTime);
+        }
+
+        // Host: stop where it stands (stunned, asleep, disguised, ringing, winding up).
+        private void HaltAgent()
+        {
+            if (!agent.enabled || !agent.isOnNavMesh) return;
+            agent.isStopped = true;
+            agent.velocity = Vector3.zero;
+            if (agent.hasPath) agent.ResetPath();
+            nextRepath = 0f;
+        }
+
         // Sight: line of sight to the player's body, inside its view cone (or right next to it). While it is
         // already chasing someone it keeps track of them outside the cone too, unless they crouch: ducking out
         // of its view or slipping behind a shelf makes it lose them after LoseHiddenAfter. "hidden" reports
         // whether the current target is hiding like that (used for the shorter give-up time).
+        // Creature differences (CreatureSenses): the TV only sees far into lit places, the spider looks wider
+        // and finds players under furniture.
         private PlayerHealth FindVisiblePlayer(out bool hidden)
         {
             hidden = false;
@@ -258,13 +353,15 @@ namespace CoOpHorror.Gameplay
             foreach (var p in PlayerHealth.All)
             {
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
-                p.TryGetComponent<FirstPersonController>(out var body);
-                var crouched = body != null && body.IsSpawned && body.Crouched.Value;
+                p.TryGetComponent<FirstPersonController>(out var playerBody);
+                var crouched = playerBody != null && playerBody.IsSpawned && playerBody.Crouched.Value;
                 // Root sits about 1 m above the feet; aim at the middle of the (crouched) body.
                 var look = p.transform.position + Vector3.up * (crouched ? -0.65f : -0.25f);
                 var distance = (look - eye).sqrMagnitude;
                 var isTarget = p == target;
-                if (distance > bestDistance) continue;
+                // A persistent hunter (the fan) keeps its target beyond its sight range until they really hide.
+                var tracking = isTarget && senses.Persistent && distance < senses.TrackRange * senses.TrackRange;
+                if (distance > bestDistance && !tracking) continue;
                 // The ray starts inside the monster's own capsule, which raycasts ignore.
                 if (Physics.Linecast(eye, look, out var hit, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
                     && hit.collider.GetComponentInParent<PlayerHealth>() != p)
@@ -272,15 +369,21 @@ namespace CoOpHorror.Gameplay
                     if (isTarget) hidden = true; // behind cover
                     continue;
                 }
-                // Squeezed under furniture: only noticed right next to it.
-                if (distance > TuckedSightRange * TuckedSightRange && body != null && body.IsTucked())
+                // Squeezed under furniture: only noticed right next to it (the spider crawls in after you).
+                if (!senses.SeesTucked && distance > TuckedSightRange * TuckedSightRange && playerBody != null && playerBody.IsTucked())
                 {
                     if (isTarget) hidden = true;
                     continue;
                 }
                 var near = distance < SenseRange * SenseRange;
+                // The TV only makes out players far away when light is on them.
+                if (senses.NeedsLight && !near && distance > senses.DarkSight * senses.DarkSight && !IsLit(p))
+                {
+                    if (isTarget) hidden = true;
+                    continue;
+                }
                 var flat = Flat(look - transform.position);
-                var inCone = flat.sqrMagnitude < 0.01f || Vector3.Angle(transform.forward, flat) <= ViewHalfAngle;
+                var inCone = flat.sqrMagnitude < 0.01f || Vector3.Angle(transform.forward, flat) <= senses.ViewHalfAngle;
                 if (!near && !inCone)
                 {
                     if (!isTarget) continue;                    // not looking that way
@@ -289,28 +392,36 @@ namespace CoOpHorror.Gameplay
                 best = p;
                 bestDistance = distance;
             }
-            if (best != null && best == target) hidden = false;
+            if (best != null && best == target) hidden = senses.NeedsLight && !IsLit(best); // the TV loses you fast in the dark
             return best;
         }
 
-        // Body slam.
+        // Body slam (the TV hits everyone in its charge line, the spider clings on instead).
         private void TryAttack()
         {
-            if (!Chasing.Value || Recognizing.Value || Time.time < nextAttack) return;
+            if (Kind == CreatureKind.TvWalker && Lunging) { ServerChargeHits(); return; }
+            if (!Chasing.Value || Recognizing.Value) return;
+            if (Time.time < nextAttack) return;
             foreach (var p in PlayerHealth.All)
             {
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
                 var offset = p.transform.position - transform.position;
                 if (Flat(offset).magnitude > AttackRange || Mathf.Abs(offset.y) > 1.6f) continue;
-                var push = Flat(offset).normalized * Knockback + Vector3.up * KnockUp;
-                p.ServerApplyDamage(AttackDamage, push);
+                if (Kind == CreatureKind.ClockSpider) { ServerLatch(p); return; }
+                Slam(p, offset);
                 lungeUntil = 0f;
-                HitFxRpc(p.OwnerClientId);
-                // The hit spills part of the victim's energy tank.
-                if (p.TryGetComponent<PlayerNose>(out var tank)) tank.ServerLeak(PlayerNose.LeakOnHit);
                 nextAttack = Time.time + AttackCooldown;
                 return;
             }
+        }
+
+        private void Slam(PlayerHealth p, Vector3 offset)
+        {
+            var push = Flat(offset).normalized * Knockback + Vector3.up * KnockUp;
+            p.ServerApplyDamage(AttackDamage, push);
+            HitFxRpc(p.OwnerClientId);
+            // The hit spills part of the victim's energy tank.
+            if (p.TryGetComponent<PlayerNose>(out var tank)) tank.ServerLeak(PlayerNose.LeakOnHit);
         }
 
         [Rpc(SendTo.Everyone, InvokePermission = RpcInvokePermission.Server)]
@@ -341,6 +452,8 @@ namespace CoOpHorror.Gameplay
             var chasing = IsSpawned && Chasing.Value;
             var color = chasing ? new Color(1f, 0.1f, 0.05f) * (1f + Mathf.PingPong(Time.time * 5f, 0.6f)) : new Color(0.55f, 0.08f, 0.05f);
             if (IsSpawned && Recognizing.Value) color = new Color(1f, 0.52f, 0.08f);
+            if (PoweredDown) color = new Color(0.03f, 0.01f, 0.01f);
+            else if (IsSpawned && Mode.Value == CreatureMode.Stunned) color = new Color(0.55f, 0.08f, 0.05f) * Mathf.PerlinNoise(Time.time * 14f, 0.3f);
             foreach (var eye in Eyes)
             {
                 if (eye == null) continue;

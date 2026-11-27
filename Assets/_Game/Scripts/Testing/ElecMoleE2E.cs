@@ -112,11 +112,17 @@ namespace CoOpHorror.Testing
                   .Append(p.TryGetComponent<FirstPersonController>(out var fpc) && fpc.IsTucked() ? ",tucked" : "")
                   .Append(",tank").Append(p.TryGetComponent<PlayerNose>(out var tank) ? tank.Energy.Value.ToString("0") : "-");
             sb.Append(";lamps=").Append(InstalledDevice.Devices.Count(d => d is PowerLamp && d.Online));
-            sb.Append(";drained=").Append(InstalledDevice.Devices.Count(d => d.IsSpawned && !d.Online));
+            // Lamps only: most CCTV cameras start dark on purpose (CctvCamera.LiveAtStart), see cam1 for the camera.
+            sb.Append(";drained=").Append(InstalledDevice.Devices.Count(d => d is PowerLamp && d.IsSpawned && !d.Online));
+            sb.Append(";cam1=").Append(CctvCamera.All.Any(c => c.Order == 1 && c.Online) ? "on" : "off");
             sb.Append(";corpses=").Append(Corpse.Bodies.Count(c => c != null && c.IsSpawned));
             foreach (var c in Corpse.Bodies.Where(c => c != null && c.IsSpawned))
                 sb.Append(";corpse").Append(c.PlayerClientId.Value).Append(stage != null && stage.InShip(c.transform.position) ? "=ship" : "=out").Append(c.IsHeld ? ",held" : "");
             sb.Append(";monster=").Append(TempMonster.All.Any(m => m.Investigating) ? "investigating" : "idle").Append(TempMonster.Frozen ? ",frozen" : "");
+            // Which appliance each investigating monster is heading for (a drain noise drew it there).
+            sb.Append(";lure=").Append(string.Join(",", TempMonster.All.Where(m => m != null && m.IsSpawned && m.Investigating)
+                .Select(m => Appliance.All.Where(a => a.IsSpawned && (a.transform.position - m.InvestigatePoint).sqrMagnitude < 1f)
+                    .Select(a => a.NameKey.Replace("appliance.", "")).FirstOrDefault() ?? "-")));
             var me = Me;
             if (me != null)
             {
@@ -158,6 +164,8 @@ namespace CoOpHorror.Testing
                 "outside" => Outside(),
                 "drain-lamp" => DrainLamp(),
                 "hide" => Hide(),
+                "lure-setup" => LureSetup(arg),
+                "lure-reset" => LureReset(),
                 _ => Unknown(step),
             };
             while (true)
@@ -339,10 +347,45 @@ namespace CoOpHorror.Testing
             message = $"CAM {number} drained (online={cam.Online}), tank {nose.Energy.Value:0}W";
         }
 
+        // Host: put the first monster on the NavMesh inside the drain radius of an appliance (but not on top of
+        // it), so draining that appliance must draw it over. The monster stays frozen; only its goal is checked.
+        private IEnumerator LureSetup(string name)
+        {
+            if (!NetworkManager.Singleton.IsServer) { Fail("host only"); yield break; }
+            var appliance = Appliance.All.First(a => a.name.EndsWith(name, StringComparison.OrdinalIgnoreCase));
+            var monster = TempMonster.All.FirstOrDefault(m => m != null && m.IsSpawned);
+            if (monster == null) { Fail("no monster"); yield break; }
+            var radius = appliance.DrainRadius;
+            var from = appliance.transform.position;
+            for (var i = 0; i < 32; i++)
+            {
+                var distance = radius * (i < 16 ? 0.7f : 0.5f);
+                var direction = Quaternion.Euler(0f, i * 22.5f, 0f) * Vector3.forward;
+                if (!NavMesh.SamplePosition(from + direction * distance, out var hit, 1.5f, NavMesh.AllAreas)) continue;
+                var gap = (hit.position - from).magnitude;
+                if (gap < 4f || gap > radius - 0.5f) continue;
+                monster.ServerTeleport(hit.position);
+                yield return null;
+                message = $"{monster.name} {gap:0.0} m from {appliance.name} (drain radius {radius:0.0} m)";
+                yield break;
+            }
+            Fail("no NavMesh spot inside the drain radius of " + appliance.name);
+        }
+
+        // Host: send the lured monster back to where it started.
+        private IEnumerator LureReset()
+        {
+            if (!NetworkManager.Singleton.IsServer) { Fail("host only"); yield break; }
+            var monster = TempMonster.All.FirstOrDefault(m => m != null && m.IsSpawned);
+            if (monster != null) monster.ServerTeleport(monster.HomePosition);
+            yield return null;
+            message = "monster back home";
+        }
+
         // Squeeze under the nearest desk (Ctrl): the host must see the player as tucked.
         private IEnumerator Hide()
         {
-            var desk = GameObject.FindObjectsByType<Transform>(FindObjectsSortMode.None).Where(t => t.name == "Desk")
+            var desk = GameObject.FindObjectsByType<Transform>(FindObjectsSortMode.None).Where(t => t.name == "Desk" && t.parent != null && t.parent.name.StartsWith("Room_")) // not the ship's CCTV desk
                 .OrderBy(t => (t.position - Me.transform.position).sqrMagnitude).First();
             var behind = desk.position + desk.forward * 1.3f;
             yield return WalkTo(behind, 0.25f);

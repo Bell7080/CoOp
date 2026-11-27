@@ -10,7 +10,7 @@ namespace CoOpHorror.Gameplay
         Jump, Land, DoorMove, FlashSwitch, PlayerHurt, PlayerDeath,
         Revive, Radio, Delivery, StingerMetal, StingerStatic,
         StingerScrape, StingerBreath, AmbientBed, ShipHum, TelekinesisLoop, GeneratorLoop,
-        TransmitterFull
+        TransmitterFull, Charge
     }
 
     // All clips are original ElevenLabs generations; gameplay authority never lives in this audio facade.

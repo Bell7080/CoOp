@@ -90,6 +90,21 @@ namespace CoOpHorror.Gameplay
             Shader.SetGlobalFloat(LampCountId, publishedCount);
         }
 
+        // Any peer (the host's creatures use it): how lit a spot is by every lamp still on, 0..1, using the
+        // same reach as the vision shader but without its nearest-to-camera limit.
+        public static float LitByAnyLamp(Vector3 position)
+        {
+            var lit = 0f;
+            foreach (var d in Devices)
+            {
+                if (d is not PowerLamp lamp || !lamp.IsSpawned || !lamp.Online) continue;
+                var reach = VisionReach * Mathf.Sqrt(lamp.Level);
+                var near = Mathf.Clamp01(1f - Vector3.Distance(position, lamp.BulbPosition) / Mathf.Max(reach, 0.01f));
+                lit = Mathf.Max(lit, near * near * (3f - 2f * near));
+            }
+            return lit;
+        }
+
         // Same as the shader's ElecLampLight (HUD labels use it so they show in lit areas too).
         public static float LightAt(Vector3 position)
         {

@@ -208,6 +208,14 @@ namespace CoOpHorror.Localization
             ["appliance.radio"] = "라디오",
             ["appliance.fan"] = "선풍기",
             ["appliance.toaster"] = "토스터",
+
+            // Creatures (drained while stunned, torn off a back)
+            ["creature.tv"] = "TV 괴물",
+            ["creature.fan"] = "선풍기 괴물",
+            ["creature.clock"] = "자명종 거미",
+            ["creature.generic"] = "괴물",
+            ["item.battery"] = "배터리",
+            ["interact.pullOff"] = "[좌클릭 꾹] {0} 떼어내기",
         };
 
         // Planned languages fall back to Korean until their tables are filled in.

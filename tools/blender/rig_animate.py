@@ -36,9 +36,10 @@ for o in list(scene.objects):
 
 # Tripo's unit box has the front at +X, up +Z, feet at z=-0.5. -> front -Y, feet at z=0, height H.
 S = H
+FLOOR = cfg.get("FLOOR", -0.5)  # a squat model's feet sit higher in the unit box (e.g. ClockSpider -0.435)
 def tf(p):
     x, y, z = p
-    return Vector((y * S, -x * S, (z + 0.5) * S))
+    return Vector((y * S, -x * S, (z - FLOOR) * S))
 
 me = mesh.data
 orig = [(v.co.x, v.co.y, v.co.z) for v in me.vertices]  # Tripo unit-box coordinates, for HARD weights

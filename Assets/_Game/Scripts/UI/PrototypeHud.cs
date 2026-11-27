@@ -356,6 +356,7 @@ namespace CoOpHorror.UI
         private static string KeyPrompt(PlayerInteractor me)
         {
             var keys = new System.Collections.Generic.List<string>();
+            if (TempMonster.LocalPinned) return "[ A ]  [ D ]"; // shake the clock spider off your back
             if (PlayerReviver.LocalLookingAtBody) keys.Add("[ HOLD E ]");
             if (me.Target is ShipMic) keys.Add("[ HOLD V ]");
             switch (me.TargetKind)

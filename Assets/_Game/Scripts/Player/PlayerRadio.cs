@@ -98,7 +98,17 @@ namespace CoOpHorror.Player
                 var mic = ShipMic.Instance;
                 if (mic == null || !mic.ServerInRange(interactor)) mode = RadioMode.Walkie;
             }
+            var previous = Mode.Value;
             Mode.Value = mode;
+            if (mode == previous) return;
+            // Keying a radio is not silent: the walkie clicks where you stand, and the ship's broadcast
+            // crackles out of every radio outside (the fan crawler hears both).
+            var stage = StageDirector.Instance;
+            if (mode == RadioMode.Walkie) Noise.Emit(transform.position, Noise.RadioRadius, NoiseKind.Radio);
+            else if (mode == RadioMode.ShipMic)
+                foreach (var p in PlayerHealth.All)
+                    if (p != null && p.IsSpawned && !p.IsDead.Value && p.gameObject != gameObject && (stage == null || !stage.InShip(p.transform.position)))
+                        Noise.Emit(p.transform.position, Noise.ShipCallRadius, NoiseKind.Radio);
         }
     }
 }

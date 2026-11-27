@@ -59,6 +59,16 @@ namespace CoOpHorror.Player
         }
         public bool Exhausted { get; private set; }
 
+        // Server -> owner: something heavy clings to you (the clock spider): slower, no running, until released.
+        [Rpc(SendTo.Owner)]
+        public void SlowRpc(float seconds, float factor)
+        {
+            slowUntil = seconds > 0f ? Time.time + seconds : 0f;
+            slowFactor = Mathf.Clamp(factor, 0.1f, 1f);
+        }
+        public bool Slowed => Time.time < slowUntil;
+        private float slowUntil, slowFactor = 1f;
+
         // Owner-written so remote players see roughly where the attacker is looking.
         public readonly NetworkVariable<float> Pitch = new(0f, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
         public readonly NetworkVariable<bool> Crouched = new(false, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Owner);
@@ -227,7 +237,7 @@ namespace CoOpHorror.Player
             ApplyStance(); // resize before this frame's movement, not one frame later
             if (ViewLocked) { input = Vector2.zero; run = false; jump = false; ResetJumpGrace(); }
 
-            var running = run && !Exhausted && input != Vector2.zero;
+            var running = run && !Exhausted && !Slowed && input != Vector2.zero;
             if (running)
             {
                 if (!Boosted) Stamina = Mathf.Max(0f, Stamina - StaminaDrain * dt);
@@ -241,7 +251,7 @@ namespace CoOpHorror.Player
             }
 
             var move = (transform.right * input.x + transform.forward * input.y);
-            move = Vector3.ClampMagnitude(move, 1f) * (crouch ? CrouchSpeed : running ? RunSpeed : WalkSpeed);
+            move = Vector3.ClampMagnitude(move, 1f) * (crouch ? CrouchSpeed : running ? RunSpeed : WalkSpeed) * (Slowed ? slowFactor : 1f);
             var grounded = controller.isGrounded;
             if (grounded && verticalVelocity <= 0f)
             {

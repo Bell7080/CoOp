@@ -131,6 +131,12 @@ namespace CoOpHorror.Player
             return true;
         }
 
+        // Server only. A shove without damage (the fan crawler's gust).
+        public void ServerPush(Vector3 velocity)
+        {
+            if (IsServer && IsSpawned && !IsDead.Value && velocity != Vector3.zero) KnockbackRpc(velocity);
+        }
+
         // Server only. Slow loss without a hit reaction (left behind by the ship).
         public void ServerDrain(int amount) => ServerApplyDamage(amount, Vector3.zero);
 
