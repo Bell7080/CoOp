@@ -38,7 +38,8 @@ namespace CoOpHorror.Gameplay
         public override string DisplayName => GameText.Get(NameKey);
 
         // Static on its feed: none at full power, heavy just before it dies, full when it is dead.
-        public float FeedStatic => Online ? (1f - Fraction) * 0.85f : 1f;
+        // A TV walker nearby jams it (the ship's watcher can tell where it is from the static).
+        public float FeedStatic => Online ? Mathf.Clamp01((1f - Fraction) * 0.85f + TempMonster.JamAt(Head != null ? Head.position : transform.position)) : 1f;
 
         // Local viewer override so the view turns without waiting for the host.
         private bool localAim;

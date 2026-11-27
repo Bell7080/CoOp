@@ -169,6 +169,7 @@ namespace CoOpHorror.Editor
             PrepareCharacter("MoleAlien");
             PrepareCharacter("TvWalker");
             PrepareCharacter("FanCrawler");
+            PrepareCharacter("ClockSpider");
         }
     }
 }

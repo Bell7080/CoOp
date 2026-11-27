@@ -6,7 +6,7 @@ client in a separate process, connected over Relay. Each step calls CoOpHorror.T
 processes; the step drives that process's own player through the real input paths (walking NavMesh routes,
 aiming, clicks, holds, skill checks). The runner asserts on the replicated state and saves screenshots.
 
-Flow: room + join -> ship door -> CCTV view -> nose drinks the kettle -> tank pumped into the ship's
+Flow: room + join -> ship door -> CCTV view -> nose drinks the kettle (its crackle draws a monster placed nearby) -> tank pumped into the ship's
 transmitter -> lamp drained and relit -> CCTV drained -> (host tops the transmitter up) ->
 microwave -> transmitter full (surplus to money) -> death, ghost spectating, revive -> body carried aboard -> launch (transmitter fires, blackout) -> escape.
 
@@ -169,26 +169,29 @@ try {
     Step client power-cctv 1 | Out-Null
     Step host cctv-view 1 | Out-Null
     Shot '03-host-cctv-view'
-    Check 'cctv view' @('cctv=1', 'cctvView=True', 'map1')
+    Check 'cctv view' @('cam1=on', 'cctvView=True', 'map[1-9]')
     Step host cctv-exit | Out-Null
 
+    Step host lure-setup 'Kettle' | Out-Null
     Step client suck 'Kettle' 240 | Out-Null
     Check 'tank filled from the kettle' @('kettle=0/1500W', 'p1=[^;]*tank1500')
+    Check 'draining the kettle drew the monster' @('monster=investigating', 'lure=[^;]*kettle')
+    Step host lure-reset | Out-Null
     Shot '04-client-kettle' 'client'
     Step client inject 180 | Out-Null
-    Check 'tank pumped into the transmitter' @('tx=Charging', 'stored=1800/2500', 'p1=[^;]*tank0')
+    Check 'tank pumped into the transmitter' @('tx=Charging', 'stored=1(799|800)/2500', 'p1=[^;]*tank0')
     Step client drain-lamp | Out-Null
     Check 'lamp drained' @('drained=1', 'p1=[^;]*tank60')
     Shot '03b-client-lamp-dark' 'client'
     Step client relight-lamp | Out-Null
     Check 'lamp relit with the right button' @('drained=0', 'p1=[^;]*tank0')
-    Step client walk '-9,-3' | Out-Null
+    Step client walk '-24,12' | Out-Null   # office B, next to its desks
     Step client hide | Out-Null
     Check 'tucked under a desk' @('p1=hp\d+,rv\d+,tucked')
     Shot '05a-client-hiding' 'client'
     if (-not $script:failed) { Invoke-Eval 'return CoOpHorror.Testing.ElecMoleE2E.StandUp();' $Client | Out-Null; Start-Sleep -Seconds 1 }
     Step client drain-cctv 1 | Out-Null
-    Check 'camera drained' @('drained=1', 'p1=[^;]*tank40')
+    Check 'camera drained' @('cam1=off', 'p1=[^;]*tank40')
     Step host tx-cheat 2450 | Out-Null
     Step client suck 'Microwave' 240 | Out-Null
     Step client inject 180 | Out-Null

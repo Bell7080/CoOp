@@ -146,7 +146,7 @@ namespace CoOpHorror.Player
             {
                 var m = Mouse.current;
                 var alive = health == null || !health.IsDead.Value;
-                var wanted = alive && !CctvView.Viewing && FirstPersonController.GameplayInputReady
+                var wanted = alive && !CctvView.Viewing && FirstPersonController.GameplayInputReady && !TempMonster.LocalPinned
                     && ((m != null && (m.leftButton.isPressed || m.rightButton.isPressed)) || (interactor != null && (interactor.AutomationHold || interactor.AutomationHoldRight)));
                 if (Extended.Value != wanted) Extended.Value = wanted;
             }
@@ -194,7 +194,8 @@ namespace CoOpHorror.Player
             if (flow != FlowNone && Time.time >= nextGulp)
             {
                 nextGulp = Time.time + 0.45f;
-                ProtoAudio.PlayPitched(ProtoSound.Pop, tipPoint, IsOwner ? 0.18f : 0.12f, flow == FlowIn ? 0.75f : 1.15f);
+                // light charging tick: a little higher while drinking in, a little lower while pumping out
+                ProtoAudio.PlayPitched(ProtoSound.Charge, tipPoint, IsOwner ? 0.16f : 0.1f, flow == FlowIn ? 1.08f : 0.92f);
             }
         }
     }

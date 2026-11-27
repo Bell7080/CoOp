@@ -73,6 +73,7 @@ namespace CoOpHorror.Gameplay
         {
             if (Sealed || (Open.Value && SomeoneInDoorway())) return;
             Open.Value = !Open.Value;
+            Noise.Emit(transform.position + Vector3.up, Noise.DoorRadius, NoiseKind.Door);
         }
 
         private bool SomeoneInDoorway()

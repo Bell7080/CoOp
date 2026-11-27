@@ -37,6 +37,7 @@ namespace CoOpHorror.Editor
         {
             new(-30f, 0f, 6f), new(14.2f, 0.95f, 9.15f), new(-22f, 0f, 25f), new(-9f, 0f, 6f),
             new(12.2f, 0.95f, 9.15f), new(16.2f, 0.95f, 9.15f), new(12f, 0f, -19.6f),
+            new(-31f, 0f, -9.3f), // the fan crawler's side table (ElecMoleCreatures.FanCrawlerTable)
         };
         private static readonly Vector3[] WardrobeFronts =
         {

@@ -23,6 +23,46 @@ namespace CoOpHorror.Gameplay
         public readonly NetworkVariable<float> AngleA = new(0f);
         public readonly NetworkVariable<float> AngleB = new(0f);
 
+        public static readonly System.Collections.Generic.List<SwingDoor> All = new();
+
+        // Walk-in wardrobes (jangnong) are swing doors too, built as "Wardrobe_NN" (ElecMoleDoors).
+        public const float WardrobeWidth = 1.6f, WardrobeDepth = 1.4f;
+        public bool IsWardrobe => name.StartsWith("Wardrobe_");
+
+        protected override void Awake()
+        {
+            base.Awake();
+            All.Add(this);
+        }
+
+        public override void OnDestroy()
+        {
+            All.Remove(this);
+            base.OnDestroy();
+        }
+
+        // Host: someone standing inside a wardrobe with its door shut (muffles the clock spider's alarm).
+        public static bool InClosedWardrobe(Vector3 position)
+        {
+            foreach (var door in All)
+            {
+                if (door == null || !door.IsSpawned || !door.IsWardrobe || door.IsOpen) continue;
+                var local = door.transform.InverseTransformPoint(position);
+                if (Mathf.Abs(local.x) < WardrobeWidth / 2f && Mathf.Abs(local.z) < WardrobeDepth / 2f && local.y < 2.5f) return true;
+            }
+            return false;
+        }
+
+        // Host: a gust (the fan crawler) blows it wide open.
+        public void ServerBlow(Vector3 from)
+        {
+            if (!IsServer || IsOpen) return;
+            var away = Vector3.Dot(from - transform.position, transform.forward) > 0f ? -1f : 1f;
+            if (OneWay) away = 1f;
+            targetA = OpenAngle(SideA, away);
+            targetB = OpenAngle(SideB, away);
+        }
+
         private float targetA = float.NaN, targetB = float.NaN;
         private float shownA, shownB;
 
@@ -36,6 +76,7 @@ namespace CoOpHorror.Gameplay
 
         public override void ServerUse(PlayerInteractor who)
         {
+            Noise.Emit(transform.position + Vector3.up, Noise.SwingDoorRadius, NoiseKind.Door);
             if (IsOpen) { targetA = 0f; targetB = 0f; return; }
             // swing away from whoever opened it
             var away = Vector3.Dot(who.transform.position - transform.position, transform.forward) > 0f ? -1f : 1f;

@@ -147,7 +147,8 @@ namespace CoOpHorror.Player
             UpdateTarget();
             var k = Keyboard.current;
             var m = Mouse.current;
-            var ready = FirstPersonController.GameplayInputReady && Alive;
+            // A clock spider on your back keeps your hands (and nose) busy.
+            var ready = FirstPersonController.GameplayInputReady && Alive && !TempMonster.LocalPinned;
             var heldLeft = (ready && m != null && m.leftButton.isPressed) || AutomationHold;
             var heldRight = (ready && m != null && m.rightButton.isPressed) || AutomationHoldRight;
             var pressed = (ready && m != null && m.leftButton.wasPressedThisFrame) || automationPress;
@@ -330,6 +331,8 @@ namespace CoOpHorror.Player
             }
             foreach (var a in Appliance.All) if (a != null && a.IsSpawned) Consider(a, a);
             foreach (var d in InstalledDevice.Devices) if (d != null && d.IsSpawned) Consider(d, d);
+            foreach (var m in TempMonster.All) if (m != null && m.NoseDrainable) Consider(m, m); // creatures (their power is their health)
+            foreach (var b in CreatureBattery.All) if (b != null && b.NoseDrainable) Consider(b, b); // batteries dead creatures left
             return best;
         }
 

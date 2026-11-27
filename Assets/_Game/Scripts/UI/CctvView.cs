@@ -411,7 +411,8 @@ namespace CoOpHorror.UI
             foreach (var p in PlayerHealth.All)
                 if (p != null && p.IsSpawned && !p.IsDead.Value) Dot(ref used, p.transform.position, new Color(0.3f, 1f, 0.4f));
             foreach (var monster in TempMonster.All)
-                if (monster != null && monster.IsSpawned) Dot(ref used, monster.transform.position, new Color(1f, 0.2f, 0.15f));
+                if (monster != null && monster.IsSpawned && !monster.PoweredDown) // dead, or a disguised fan (just a fan)
+                    Dot(ref used, monster.transform.position, new Color(1f, 0.2f, 0.15f));
             for (var i = used; i < miniDots.Count; i++) miniDots[i].enabled = false;
         }
 

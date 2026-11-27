@@ -34,6 +34,8 @@ namespace CoOpHorror.Player
             var metal=stage!=null&&position.x>=stage.ShipMin.x&&position.x<=stage.ShipMax.x&&position.z>=stage.ShipMin.z&&position.z<=stage.ShipMax.z;
             var volume=motor.Crouched.Value?0.09f:speed>5f?0.42f:0.24f;
             ProtoAudio.PlayPitched(metal?ProtoSound.FootstepMetal:ProtoSound.FootstepConcrete,floor.point,volume,Random.Range(0.92f,1.08f));
+            // Host: footsteps are a noise the fan crawler hunts by (crouching is silent).
+            if(motor.IsServer&&!motor.Crouched.Value)Noise.Emit(floor.point,speed>5f?Noise.RunRadius:Noise.WalkRadius,NoiseKind.Footstep);
         }
     }
 }

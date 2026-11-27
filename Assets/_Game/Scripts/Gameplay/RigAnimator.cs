@@ -128,6 +128,8 @@ namespace CoOpHorror.Gameplay
             var crouched = player != null && player.IsSpawned && player.Crouched.Value;
             var chasing = monster != null && monster.IsSpawned && monster.Chasing.Value;
             string next;
+            // Powered down (drained flat, or the fan lying still as a fake appliance): frozen like a prop.
+            if (monster != null && monster.PoweredDown) { Animator.speed = 0f; return; }
             if (Time.time < forcedUntil) { Animator.speed = 1f; return; }
             if (crouched && !string.IsNullOrEmpty(CrouchState)) next = CrouchState;
             else if (chasing && speed < MoveSpeed && !string.IsNullOrEmpty(AttackState)) next = AttackState;

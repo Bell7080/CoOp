@@ -10,6 +10,9 @@ namespace CoOpHorror.Gameplay
     // and drinks it into your energy tank (PlayerNose) at a flat, slow rate (PlayerNose.SuckRate, faster on
     // later stages), so bigger appliances simply take longer. No minigame. Drained, it goes dark and stays
     // where it is; nothing is carried. The host writes the remaining power; every peer shows it.
+    // Draining it is not quiet: while a nose drinks, the appliance flares and ticks like a charger, and the host emits
+    // a Noise every NoisePeriod with a radius that grows with its Watts (Noise.DrainRadius). Monsters in
+    // range come over; once there they find the drinker by sight (TempMonster's usual chase).
     public sealed class Appliance : Interactable, IChargeGauge, INoseTarget
     {
         public static readonly List<Appliance> All = new();
@@ -19,7 +22,12 @@ namespace CoOpHorror.Gameplay
         public Renderer Indicator;
         public Light Glow;
 
+        public const float NoisePeriod = 0.5f;
+
         public readonly NetworkVariable<float> Power = new(0f);
+        public readonly NetworkVariable<bool> Draining = new(false);   // a nose is drinking from it right now
+
+        public float DrainRadius => Noise.DrainRadius(Watts);
 
         public bool IsEmpty => IsSpawned && Power.Value <= 0.5f;
         public bool IsGone => false;              // (kept for the HUD / labels: nothing hides appliances now)
@@ -36,6 +44,9 @@ namespace CoOpHorror.Gameplay
         private MaterialPropertyBlock block;
         private float glowIntensity;
         private bool wasEmpty;
+        private float lastDrainTime = -10f, nextNoise;
+        private Light flare;
+        private float nextTick;
         private static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly Color Dead = new(0.12f, 0.03f, 0.03f);
         private static readonly Color Full = new(0.35f, 1f, 0.85f);
@@ -69,6 +80,9 @@ namespace CoOpHorror.Gameplay
             if (!IsServer) return;
             // Every new room starts full.
             Power.Value = Watts;
+            Draining.Value = false;
+            lastDrainTime = -10f;
+            nextNoise = 0f;
             if (body != null) body.isKinematic = true;
         }
 
@@ -101,8 +115,19 @@ namespace CoOpHorror.Gameplay
             var taken = nose.ServerAdd(Mathf.Min(PlayerNose.SuckRate * dt, Power.Value));
             Power.Value = Mathf.Max(0f, Power.Value - taken);
             nose.ServerSetFlow(taken > 0f ? PlayerNose.FlowIn : PlayerNose.FlowNone);
+            if (taken > 0f) ServerDrainSignal();
             if (IsEmpty) { Power.Value = 0f; return false; }
             return true;
+        }
+
+        // Host: the drink is loud and bright. Emits right away when a drink starts, then every NoisePeriod.
+        private void ServerDrainSignal()
+        {
+            lastDrainTime = Time.time;
+            if (!Draining.Value) Draining.Value = true;
+            if (Time.time < nextNoise) return;
+            nextNoise = Time.time + NoisePeriod;
+            Noise.Emit(transform.position, DrainRadius, NoiseKind.Drain);
         }
 
         // Right button: the nose pumps power back in from the tank (switches it on again).
@@ -143,6 +168,8 @@ namespace CoOpHorror.Gameplay
         private void Update()
         {
             if (!IsSpawned) return; // outside a room it stays as the scene placed it
+            // Nobody drank for a moment (let go, drained, nose knocked off): the flare dies down.
+            if (IsServer && Draining.Value && Time.time - lastDrainTime > 0.25f) Draining.Value = false;
 
             var gone = IsGone;
             foreach (var r in renderers) if (r != null) r.enabled = !gone;
@@ -166,6 +193,35 @@ namespace CoOpHorror.Gameplay
             {
                 Glow.enabled = !gone && !empty;
                 Glow.intensity = glowIntensity * (0.25f + 0.75f * fraction);
+            }
+            UpdateDrainFx(!gone && !empty && Draining.Value);
+        }
+
+        // Every peer: while it is being drained, a flickering light reaching about as far as the monsters can
+        // hear it, and a soft charging tick. Bigger appliances flare wider and louder.
+        private void UpdateDrainFx(bool on)
+        {
+            if (on && flare == null)
+            {
+                var go = new GameObject("DrainFlare");
+                go.transform.SetParent(transform, false);
+                go.transform.position = mainCollider != null ? mainCollider.bounds.center + Vector3.up * 0.3f : transform.position + Vector3.up * 0.5f;
+                flare = go.AddComponent<Light>();
+                flare.type = LightType.Point;
+                flare.color = new Color(0.55f, 0.95f, 1f);
+                flare.shadows = LightShadows.None;
+            }
+            if (flare == null) return;
+            flare.enabled = on;
+            if (!on) return;
+            var size = Mathf.InverseLerp(Noise.DrainRadius(30), Noise.DrainRadius(1500), DrainRadius);
+            flare.range = DrainRadius * 0.75f;
+            flare.intensity = Mathf.Lerp(1.2f, 3f, size) * (0.55f + 0.45f * Mathf.PerlinNoise(Time.time * 18f, GetInstanceID() * 0.01f));
+            if (Time.time >= nextTick)
+            {
+                // a soft charging tick from the appliance itself; bigger ones are a bit louder and deeper
+                nextTick = Time.time + Random.Range(0.55f, 0.8f);
+                ProtoAudio.PlayPitched(ProtoSound.Charge, flare.transform.position, Mathf.Lerp(0.12f, 0.3f, size), Mathf.Lerp(1f, 0.85f, size));
             }
         }
     }

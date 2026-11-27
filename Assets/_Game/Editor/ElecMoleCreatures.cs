@@ -27,10 +27,64 @@ namespace CoOpHorror.Editor
                 new Vector3(27f, 0f, 0f), new Vector3(25f, 0f, 17f), new Vector3(9f, 0f, 19f),
                 new Vector3(9f, 0f, 0f), new Vector3(9f, 0f, -19f), new Vector3(27f, 0f, -19f),
             });
-            BuildFanCrawler(new Vector3(-27f, 0f, 0f), new[]
+            // The fan crawler starts as one more desk fan on a side table in the dorm (the real fan stays in the
+            // cross corridor); a nose drinking from it turns it into the creature.
+            var table = OnStand("FanCrawler", FanCrawlerTable, FanCrawlerYaw, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f));
+            var fan = BuildFanCrawler(table, new[]
             {
                 new Vector3(-27f, 0f, 0f), new Vector3(-27f, 0f, 19f), new Vector3(-9f, 0f, 19f), new Vector3(-9f, 0f, 0f),
             });
+            DisguiseAsDeskFan(fan, FanCrawlerYaw);
+        }
+
+        private static readonly Vector3 FanCrawlerTable = new(-31f, 0f, -9.3f); // dorm, against the south wall (clear of the beds)
+        private const float FanCrawlerYaw = 0f;                                   // facing into the room (north)
+
+        // The battery a creature drops when its power is drained to nothing (hidden until then; drink only).
+        private static CreatureBattery BuildCreatureBattery(string name, Vector3 position)
+        {
+            var root = NetRoot(name + "Battery", position, 0f);
+            var shell = Mat("BatteryShell", new Color(0.16f, 0.17f, 0.18f));
+            var metal = Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f));
+            Shape(root.transform, "Cell", PrimitiveType.Cylinder, new Vector3(0f, 0.22f, 0f), Vector3.zero, new Vector3(0.24f, 0.2f, 0.24f), shell);
+            Shape(root.transform, "Cap", PrimitiveType.Cylinder, new Vector3(0f, 0.45f, 0f), Vector3.zero, new Vector3(0.1f, 0.03f, 0.1f), metal);
+            Shape(root.transform, "Band", PrimitiveType.Cylinder, new Vector3(0f, 0.3f, 0f), Vector3.zero, new Vector3(0.25f, 0.025f, 0.25f), metal);
+            var led = Shape(root.transform, "Indicator", PrimitiveType.Cube, new Vector3(0f, 0.22f, 0.122f), Vector3.zero, new Vector3(0.06f, 0.18f, 0.01f), Mat("Indicator", Color.white, unlit: true));
+            var collider = root.AddComponent<BoxCollider>();
+            collider.center = new Vector3(0f, 0.24f, 0f);
+            collider.size = new Vector3(0.3f, 0.48f, 0.3f);
+            var battery = root.AddComponent<CreatureBattery>();
+            battery.Indicator = led.GetComponent<Renderer>();
+            battery.Glow = PointLight(root.transform, "Glow", new Vector3(0f, 0.6f, 0f), new Color(0.35f, 1f, 0.85f), 0.8f, 2.5f);
+            return battery;
+        }
+
+        // The look of the appliance fan (BuildFan) on the creature, shown while it is disguised.
+        private static void DisguiseAsDeskFan(TempMonster fan, float yaw)
+        {
+            const float scale = 0.55f; // same size as the real fan on its side table
+            var root = fan.transform;
+            root.rotation = Quaternion.Euler(0f, yaw, 0f);
+            var disguise = new GameObject("Disguise").transform;
+            disguise.SetParent(root, false);
+            disguise.localScale = Vector3.one * scale;
+            var body = Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f));
+            Shape(disguise, "Base", PrimitiveType.Cube, new Vector3(0f, 0.03f, 0f), Vector3.zero, new Vector3(0.35f, 0.06f, 0.3f), body);
+            Shape(disguise, "Pole", PrimitiveType.Cube, new Vector3(0f, 0.27f, 0f), Vector3.zero, new Vector3(0.06f, 0.45f, 0.06f), body);
+            Shape(disguise, "Head", PrimitiveType.Cylinder, new Vector3(0f, 0.52f, 0f), new Vector3(90f, 0f, 0f), new Vector3(0.4f, 0.04f, 0.4f), body);
+            var hub = Shape(disguise, "Indicator", PrimitiveType.Sphere, new Vector3(0f, 0.52f, 0.05f), Vector3.zero, Vector3.one * 0.12f, Mat("Indicator", Color.white, unlit: true));
+            if (Dress(disguise, ShipProp("KrFan"), Vector3.zero, new Vector3(0.5f, 1.05f, 0.4f), 0f, true) != null)
+            {
+                HideRenderers(disguise, "Base", "Pole", "Head");
+                hub.transform.localPosition = new Vector3(0f, 0.15f, 0.2f);
+                hub.transform.localScale = Vector3.one * 0.07f;
+            }
+            hub.GetComponent<Renderer>().sharedMaterial = Mat("FanDisguiseLed", new Color(0.35f, 1f, 0.85f), unlit: true);
+            PointLight(disguise, "Glow", new Vector3(0f, 0.97f, 0.3f), new Color(0.35f, 1f, 0.85f), 0.8f, 2.5f);
+            foreach (var c in disguise.GetComponentsInChildren<Collider>(true)) Object.DestroyImmediate(c);
+            fan.StartsDisguised = true;
+            fan.DisguiseVisual = disguise.gameObject;
+            fan.CreatureVisual = root.Find("Visual").gameObject;
         }
 
         private static (GameObject root, Transform visual) CreatureRoot(string name, Vector3 position, float radius, float height)
@@ -69,7 +123,16 @@ namespace CoOpHorror.Editor
                 waypoints[i].position = UnityEngine.AI.NavMesh.SamplePosition(spot, out var hit, 2f, UnityEngine.AI.NavMesh.AllAreas) ? hit.position : spot;
             }
             var monster = root.AddComponent<TempMonster>();
+            // Each creature's senses and gimmicks (CreatureSenses / TempMonster.Creatures.cs).
+            monster.Kind = name switch
+            {
+                "TvWalker" => CreatureKind.TvWalker,
+                "FanCrawler" => CreatureKind.FanCrawler,
+                "ClockSpider" => CreatureKind.ClockSpider,
+                _ => CreatureKind.Generic,
+            };
             monster.Waypoints = waypoints;
+            monster.Battery = BuildCreatureBattery(name, root.transform.position);
             monster.Eyes = eyes;
             monster.PatrolSpeed = patrol;
             monster.InvestigateSpeed = investigate;
@@ -117,9 +180,9 @@ namespace CoOpHorror.Editor
                 rig.FastClipSpeedPerMetre = 0.5f;    // long bounding strides while charging
                 rig.StepsPerCycle = 2;               // thump, thump
                 rig.StepVolume = 0.45f;
-                var tv = Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.4f, 14f, 1.4f, 22, null);
+                var tv = Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.0f, 14f, 1.4f, 22, null);
                 // spots you, bounces frantically and rams you head first from far away
-                tv.LungeRange = 9f; tv.LungeSpeed = 7.5f; tv.LungeSeconds = 1.3f; tv.LungeCooldown = 4f; tv.Knockback = 13f; tv.KnockUp = 5f;
+                tv.LungeRange = 9f; tv.LungeSpeed = 8f; tv.LungeSeconds = 1.3f; tv.LungeCooldown = 4f; tv.Knockback = 13f; tv.KnockUp = 5f;
                 return;
             }
             var plastic = Mat("TvPlastic", new Color(0.32f, 0.25f, 0.18f), tex: Texture("Wood"), tiling: 1f);
@@ -145,7 +208,7 @@ namespace CoOpHorror.Editor
             Shape(visual, "AntennaL", PrimitiveType.Cylinder, new Vector3(-0.15f, 1.95f, -0.1f), new Vector3(0f, 0f, 25f), new Vector3(0.02f, 0.3f, 0.02f), shoe);
             Shape(visual, "AntennaR", PrimitiveType.Cylinder, new Vector3(0.15f, 1.95f, -0.1f), new Vector3(0f, 0f, -25f), new Vector3(0.02f, 0.3f, 0.02f), shoe);
             var eyes = Face(visual, new Vector3(-0.08f, 1.38f, 0.383f), 1.1f);
-            Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.4f, 14f, 1.4f, 22, eyes);
+            Brain(root, "TvWalker", route, 1.6f, 2.6f, 3.0f, 14f, 1.4f, 22, eyes);
             var anim = root.AddComponent<CreatureAnimator>();
             anim.Limbs = limbs.ToArray();
             anim.Body = visual;
@@ -157,6 +220,21 @@ namespace CoOpHorror.Editor
         private static void BuildClockSpider(Vector3 position, Vector3[] route)
         {
             var (root, visual) = CreatureRoot("Creature_ClockSpider", position, 0.55f, 1.3f);
+            // Tripo model from the concept image, rigged in Blender (cfg_clockspider.py): four fleshy legs
+            // trotting in diagonal pairs.
+            if (SpawnCharacter(visual, "ClockSpider", Color.white, root.transform, out var rig) != null)
+            {
+                rig.MoveState = "Walk";
+                rig.FastState = "Chase";
+                rig.AttackState = "Attack";
+                rig.FastSpeed = 99f;
+                rig.ClipSpeedPerMetre = 1.4f;        // ~0.35 m per walk cycle
+                rig.FastClipSpeedPerMetre = 0.8f;    // ~0.43 m per frantic chase cycle
+                rig.StepsPerCycle = 2;               // tick-tack: each diagonal pair plants once
+                rig.StepVolume = 0.15f;
+                Brain(root, "ClockSpider", route, 2.2f, 3.2f, 4.0f, 10f, 0.75f, 15, null);
+                return;
+            }
             var red = Mat("ClockRed", new Color(0.6f, 0.1f, 0.08f), tex: Texture("Rust"), tiling: 1f);
             var metal = Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f));
             var leg = Mat("SpiderLeg", new Color(0.12f, 0.1f, 0.09f));
@@ -191,7 +269,7 @@ namespace CoOpHorror.Editor
         }
 
         // Desk fan dragging itself on two long human arms.
-        private static void BuildFanCrawler(Vector3 position, Vector3[] route)
+        private static TempMonster BuildFanCrawler(Vector3 position, Vector3[] route)
         {
             var (root, visual) = CreatureRoot("Creature_FanCrawler", position, 0.5f, 1.4f);
             if (SpawnCharacter(visual, "FanCrawler", Color.white, root.transform, out var rig) != null)
@@ -204,10 +282,10 @@ namespace CoOpHorror.Editor
                 rig.FastClipSpeedPerMetre = 0.48f;
                 rig.StepsPerCycle = 2;
                 rig.StepVolume = 0.2f;
-                var fan = Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 16f, 1.0f, 25, null);
+                var fan = Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 12f, 1.0f, 25, null);
                 // scuttles up fast and shoves its face into yours
                 fan.LungeRange = 5.5f; fan.LungeSpeed = 9f; fan.LungeSeconds = 0.7f; fan.LungeCooldown = 3f; fan.Knockback = 10f; fan.KnockUp = 6f;
-                return;
+                return fan;
             }
             var plastic = Mat("FanPlastic", new Color(0.75f, 0.78f, 0.72f));
             var skin = Mat("ArmSkin", new Color(0.72f, 0.55f, 0.45f));
@@ -232,7 +310,7 @@ namespace CoOpHorror.Editor
                 Shape(shoulder, "Hand", PrimitiveType.Cube, new Vector3(side * 0.12f, -0.8f, 0.95f), Vector3.zero, new Vector3(0.18f, 0.05f, 0.22f), skin);
                 limbs.Add(Limb(shoulder, Vector3.right, side < 0 ? 0f : Mathf.PI, 28f));
             }
-            Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 16f, 1.0f, 25, eyes);
+            var crawler = Brain(root, "FanCrawler", route, 1.3f, 2.4f, 3.0f, 12f, 1.0f, 25, eyes);
             var anim = root.AddComponent<CreatureAnimator>();
             anim.Limbs = limbs.ToArray();
             anim.Body = visual;
@@ -240,6 +318,7 @@ namespace CoOpHorror.Editor
             anim.StrideRate = 3.5f;
             anim.Spinners = new[] { blades };
             anim.SpinSpeed = 720f;
+            return crawler;
         }
 
         // ---------------- player: squishy mole alien ----------------

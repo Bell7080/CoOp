@@ -6,7 +6,12 @@ Writes mono 16-bit 44.1 kHz WAVs into Assets/_Game/Resources/Audio/ElevenLabs/ (
 loads every ProtoSound from):
   Jump.wav            soft, wet slime hop: a short rising "bloop" with a jelly wobble, low-passed
   TransmitterFull.wav quest-complete chime: rising soft bell arpeggio over a warm pad, small room reverb
+  Charge.wav          light charging tick for the nose drinking/pumping: a soft, short rising sine "pwip"
+                      with a faint shimmer, quiet and clean (replaces the old low gulp and buzz while draining)
+
+    python tools/audio/synth_sfx.py Charge.wav   # write only the named file(s)
 """
+import sys
 import os
 import wave
 
@@ -120,6 +125,28 @@ def transmitter_full():
     return normalize(x * fade, -2.0, -18.0)
 
 
+def charge():
+    n = int(0.26 * RATE)
+    t = np.arange(n) / RATE
+    # a gentle upward glide, like a small battery indicator filling
+    freq = 560 + 340 * (1 - np.exp(-t / 0.07))
+    phase = 2 * np.pi * np.cumsum(freq) / RATE
+    tone = np.sin(phase) + 0.22 * np.sin(2 * phase) + 0.06 * np.sin(3 * phase)
+    shimmer = 1 + 0.12 * np.sin(2 * np.pi * 32 * t)
+    x = tone * shimmer * env(n, 0.018, 0.075)
+    # a faint airy electric fizz on top, very low
+    x += 0.05 * bandpass(rng.standard_normal(n), 2500, 6000) * env(n, 0.01, 0.05)
+    x = lowpass(x, 4200)
+    fade = np.clip((n / RATE - t) / 0.04, 0, 1)
+    return normalize(x * fade, -6.0, -24.0)
+
+
+SOUNDS = {
+    'Jump.wav': slime_jump,
+    'TransmitterFull.wav': transmitter_full,
+    'Charge.wav': charge,
+}
+
 if __name__ == '__main__':
-    write('Jump.wav', slime_jump())
-    write('TransmitterFull.wav', transmitter_full())
+    for name in (sys.argv[1:] or SOUNDS):
+        write(name, SOUNDS[name]())
