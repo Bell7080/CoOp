@@ -220,6 +220,10 @@ namespace CoOpHorror.Editor
         private static void BuildClockSpider(Vector3 position, Vector3[] route)
         {
             var (root, visual) = CreatureRoot("Creature_ClockSpider", position, 0.55f, 1.3f);
+            // it crawls over walls and ceilings (TempMonster.Climb): full rotation, as quaternions
+            var spiderSync = root.GetComponent<NetworkTransform>();
+            spiderSync.SyncRotAngleX = spiderSync.SyncRotAngleZ = true;
+            spiderSync.UseQuaternionSynchronization = true;
             // Tripo model from the concept image, rigged in Blender (cfg_clockspider.py): four fleshy legs
             // trotting in diagonal pairs.
             if (SpawnCharacter(visual, "ClockSpider", Color.white, root.transform, out var rig) != null)

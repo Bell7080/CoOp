@@ -121,7 +121,8 @@ namespace CoOpHorror.Gameplay
             var dt = Mathf.Max(Time.deltaTime, 0.0001f);
             var moved = MotionRoot.position - last;
             last = MotionRoot.position;
-            var flat = new Vector2(moved.x, moved.z).magnitude / dt;
+            // Monsters count climbing too (the clock spider going up a wall); players only ground speed.
+            var flat = (monster != null ? moved.magnitude : new Vector2(moved.x, moved.z).magnitude) / dt;
             if (flat > 30f) flat = 0f; // teleports
             speed = Mathf.Lerp(speed, flat, 1f - Mathf.Exp(-10f * dt));
 

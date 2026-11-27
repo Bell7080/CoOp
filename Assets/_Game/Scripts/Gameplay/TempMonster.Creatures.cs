@@ -24,7 +24,7 @@ namespace CoOpHorror.Gameplay
     //
     // Clock spider (time): ticks all the time (louder up close), rings an alarm every 90 s (20 s in the
     // blackout) that calls the others over, sees in the dark and under furniture. It leaps onto a player's
-    // back: slowed, no nose, a 5 s countdown, then a loud alarm (muffled inside a shut wardrobe). A teammate
+    // head (its legs hang into the victim's first-person view): slowed, no nose, a 5 s countdown, then a loud alarm (muffled inside a shut wardrobe). A teammate
     // holding the left button on it tears it off; alone, shake it off with A / D.
     public sealed partial class TempMonster
     {
@@ -141,6 +141,7 @@ namespace CoOpHorror.Gameplay
             windupUntil = gustUntil = ringUntil = 0f;
             gustPending = false;
             nextAlarm = Time.time + AlarmEvery;
+            ServerResetSurface();
             if (body != null) body.isTrigger = false;
         }
 
@@ -422,6 +423,7 @@ namespace CoOpHorror.Gameplay
 
         private void ServerLatch(PlayerHealth p)
         {
+            ServerResetSurface(); // (it may land on them from the ceiling)
             victim = p;
             target = null;
             Chasing.Value = false;
@@ -435,6 +437,7 @@ namespace CoOpHorror.Gameplay
             shakes = 0;
             LatchedTo.Value = p.NetworkObjectId;
             Mode.Value = CreatureMode.Latched;
+            transform.SetPositionAndRotation(BackOf(p), p.transform.rotation);
             if (p.TryGetComponent<PlayerInteractor>(out var hands)) hands.ServerLetGoOfEverything();
             if (p.TryGetComponent<FirstPersonController>(out var motor)) motor.SlowRpc(LatchSeconds + 1f, LatchSlow);
             p.ServerApplyDamage(LatchDamage, Vector3.zero);
@@ -444,8 +447,7 @@ namespace CoOpHorror.Gameplay
         private void ServerTickLatched()
         {
             if (victim == null || !victim.IsSpawned || victim.IsDead.Value) { ServerRelease(false, Vector3.zero); return; }
-            var back = victim.transform.position - victim.transform.forward * 0.45f + Vector3.down * 0.55f;
-            transform.SetPositionAndRotation(back, victim.transform.rotation);
+            transform.SetPositionAndRotation(BackOf(victim), victim.transform.rotation);
             if (Time.time < latchEnd) return;
             // Time's up: it rings right on their back.
             var muffled = SwingDoor.InClosedWardrobe(victim.transform.position);
@@ -455,6 +457,11 @@ namespace CoOpHorror.Gameplay
             AlarmFxRpc(muffled);
             ServerRelease(true, -victim.transform.forward);
         }
+
+        // On top of the victim's head (it grips their skull; the victim sees its legs over their eyes).
+        private static Vector3 BackOf(PlayerHealth p) =>
+            (p.TryGetComponent<FirstPersonController>(out var m) && m.AimPivot != null ? m.AimPivot.position : p.transform.position + Vector3.up * 0.72f)
+            + Vector3.up * 0.1f;
 
         // Host: off the victim's back, onto the floor (stunned when torn or shaken off, or after ringing).
         private void ServerRelease(bool stun, Vector3 throwDirection)
@@ -521,7 +528,7 @@ namespace CoOpHorror.Gameplay
             if (!IsSpawned || Kind != CreatureKind.ClockSpider) return;
             var latched = Mode.Value == CreatureMode.Latched;
             if (PoweredDown) return;
-            if (Time.time >= nextTick)
+            if (Time.time >= nextTick && Time.time >= silentUntil) // (silent just before it drops from the ceiling)
             {
                 var left = latched ? Mathf.Clamp01((float)(LatchEndsAt.Value - NetTime) / LatchSeconds) : 1f;
                 nextTick = Time.time + (latched ? Mathf.Lerp(0.08f, 0.45f, left) : 0.6f);
