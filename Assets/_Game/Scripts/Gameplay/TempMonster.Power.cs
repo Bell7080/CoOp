@@ -145,6 +145,7 @@ namespace CoOpHorror.Gameplay
         private void ServerDie()
         {
             if (Mode.Value == CreatureMode.Dead) return;
+            var dropAt = FloorUnder(transform.position); // (a spider drained on the ceiling falls; its battery lands below)
             if (Mode.Value == CreatureMode.Latched) ServerRelease(false, Vector3.zero);
             if (Mode.Value == CreatureMode.Disguised) ServerDropToFloor();
             HaltAgent();
@@ -157,7 +158,7 @@ namespace CoOpHorror.Gameplay
             gustPending = false;
             Power.Value = 0f;
             Mode.Value = CreatureMode.Dead;
-            if (Battery != null) Battery.ServerDrop(transform.position + transform.right * 0.6f, Mathf.RoundToInt(Capacity * BatteryShare));
+            if (Battery != null) Battery.ServerDrop(dropAt + Flat(transform.right).normalized * 0.6f, Mathf.RoundToInt(Capacity * BatteryShare));
             DeathFxRpc();
         }
 

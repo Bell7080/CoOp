@@ -28,6 +28,9 @@ namespace CoOpHorror.Editor
                 new DecorProp("KenneyFactory/machine-fortified", 1.6f), new DecorProp("KenneyCityIndustrial/detail-tank", 1.6f),
                 new DecorProp("QuaterniusSciFi/Prop_Barrel_Large", 1.2f), new DecorProp("KenneyFactory/pipe-large-valve", 1f),
                 new DecorProp("QuaterniusZombie/Barrel", 1f), new DecorProp("QuaterniusSciFi/Prop_Chest", 0.6f),
+                // the maintenance corner (Poly Haven): a tool cart, a tool chest, fuel cans
+                new DecorProp(PH("tool_cart"), 0.95f), new DecorProp(PH("metal_tool_chest"), 1.1f),
+                new DecorProp(PH("metal_jerrycan"), 0.45f),
             },
             // transmitter room: a loading bay - crates, a container, a robot arm and a scanner gate, a pallet
             [RoomKind.TransmitterRoom] = new[]
@@ -36,6 +39,9 @@ namespace CoOpHorror.Editor
                 new DecorProp("KenneyFactory/box-large", 1.1f), new DecorProp("KenneyFactory/scanner-high", 2f),
                 new DecorProp("QuaterniusSciFi/Prop_Crate4", 0.9f), new DecorProp("KenneyFactory/box-long", 0.8f),
                 new DecorProp("QuaterniusZombie/Pallet", 0.15f, false),
+                // storage shelving along the walls, like the storage rooms of both games
+                new DecorProp(PH("steel_frame_shelves_01"), 2f), new DecorProp(PH("industrial_storage_cart"), 1f),
+                new DecorProp(PH("plastic_crate_01"), 0.35f), new DecorProp(PH("old_military_crate"), 0.6f),
             },
             // break room: kitchen corner and somewhere to slump
             [RoomKind.Breakroom] = new[]
@@ -43,13 +49,15 @@ namespace CoOpHorror.Editor
                 new DecorProp("KenneyFurniture/kitchenCabinet", 0.95f), new DecorProp("KenneyFurniture/kitchenFridgeSmall", 0.9f),
                 new DecorProp("QuaterniusHouse/Kitchen_Oven", 1f), new DecorProp("QuaterniusHouse/Couch_Medium1", 0.85f),
                 new DecorProp("KenneyFurniture/stoolBar", 0.8f), new DecorProp("QuaterniusHouse/Trashcan_Green", 0.8f),
+                new DecorProp(PH("plastic_monobloc_chair_01"), 0.85f), new DecorProp(PH("WetFloorSign_01"), 0.65f, false),
             },
-            // dorm: laundry, a sofa, shelves, a floor lamp
+            // dorm: laundry, shelves, a floor lamp (the sofa is placed by hand in front of the TV)
             [RoomKind.Dorm] = new[]
             {
-                new DecorProp("KenneyFurniture/washerDryerStacked", 1.9f), new DecorProp("KenneyFurniture/loungeSofa", 0.85f),
+                new DecorProp("KenneyFurniture/washerDryerStacked", 1.9f),
                 new DecorProp("QuaterniusHouse/Bookshelf", 1.9f), new DecorProp("QuaterniusHouse/Drawer_3", 1f),
                 new DecorProp("QuaterniusHouse/Light_Floor1", 1.7f), new DecorProp("KenneyFurniture/sideTableDrawers", 0.6f),
+                new DecorProp(PH("painted_wooden_cabinet"), 1.8f), new DecorProp(PH("side_table_01"), 0.55f),
             },
             // offices: open shelving, filing, a reading chair, a lamp and a plant
             [RoomKind.OfficeB] = new[]
@@ -57,11 +65,14 @@ namespace CoOpHorror.Editor
                 new DecorProp("QuaterniusHouse/Shelf_Large", 1.9f), new DecorProp("KenneyFurniture/bookcaseOpen", 1.9f),
                 new DecorProp("QuaterniusHouse/Drawer_5", 1f), new DecorProp("KenneyFurniture/loungeChair", 0.9f),
                 new DecorProp("KenneyFurniture/lampSquareFloor", 1.6f), new DecorProp("QuaterniusHouse/Houseplant_2", 1f),
+                // filing cabinets and a worn bookshelf, as in every office
+                new DecorProp(PH("drawer_cabinet"), 1.3f), new DecorProp(PH("wooden_bookshelf_worn"), 1.9f),
             },
             // server room: just a network cabinet and a spare terminal against the walls
             [RoomKind.Server] = new[]
             {
                 new DecorProp("QuaterniusSciFi/Prop_AccessPoint", 1.2f), new DecorProp("KenneySpaceStation/computer-system", 1.6f),
+                new DecorProp(PH("worn_metal_rack"), 1.9f), new DecorProp(PH("steel_frame_shelves_02"), 2f),
             },
         };
 
@@ -89,7 +100,9 @@ namespace CoOpHorror.Editor
                     {
                         // pushed against the wall, front facing into the room; the back face just clear of the
                         // wall (walls reach up to ~0.2 m into the edge cell), deep props stick out into the room
-                        var yaw = Quaternion.LookRotation(-outward).eulerAngles.y;
+                        // Kenney furniture faces its local -Z (Quaternius faces +Z): turn it round so shelves,
+                        // drawers and the washer show their fronts to the room, not to the wall
+                        var yaw = Quaternion.LookRotation(-outward).eulerAngles.y + (prop.Model.StartsWith("KenneyFurniture/") ? 180f : 0f);
                         var position = cell + outward * (0.5f - 0.24f - size.z / 2f);
                         if (!SpotFree(position, yaw, size, used)) continue;
                         Clutter(clutter, prop.Model, position, yaw, prop.Height, prop.Solid);

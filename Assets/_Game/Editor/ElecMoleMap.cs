@@ -38,6 +38,9 @@ namespace CoOpHorror.Editor
             new(RoomKind.OfficeB, 0, 2), new(RoomKind.CorridorN, 1, 2), new(RoomKind.Server, 2, 2), new(RoomKind.TransmitterRoom, 3, 2, new Vector2(-5f, -5f)),
         };
 
+        // The dorm sofa, facing the TV cabinet (DormTvStand) from the north.
+        private static Vector3 DormSofa => new(-25.5f, 0f, -6.4f);
+
         // The crashed ship (south-west room).
         private static class Ship
         {
@@ -226,7 +229,12 @@ namespace CoOpHorror.Editor
                 case RoomKind.Dorm:
                     foreach (var z in new[] { -7.5f, -3.5f, 3.5f, 7.5f }) Bed(root, new Vector3(-34.2f, 0f, z), 90f);
                     for (var i = 0; i < 4; i++) Locker(root, new Vector3(-34.8f + i * 0.7f, 0f, 9.45f), 180f);
-                    Table(root, new Vector3(-24f, 0f, -6f), 0f, 1.6f, 0.9f);
+                    Table(root, new Vector3(-27f, 0f, 5.5f), 0f, 1.6f, 0.9f); // in the back room
+                    // the TV corner: the TV cabinet against the south wall (BuildGameplay), a rug, and the sofa
+                    // facing the screen from 3 m, like a living room rather than a TV left in the middle of the floor
+                    var rug = Group(root, "Rug", new Vector3(DormTvStand.x, 0.005f, DormTvStand.z + 2f), 0f);
+                    Dress(rug, "KenneyFurniture/rugRectangle", Vector3.zero, new Vector3(2.6f, 0.02f, 2.2f));
+                    Clutter(root, "KenneyFurniture/loungeSofa", DormSofa, 0f, 0.85f); // Kenney fronts face -Z: towards the TV
                     break;
                 case RoomKind.OfficeA:
                     foreach (var x in new[] { -14f, -4f })
@@ -269,10 +277,14 @@ namespace CoOpHorror.Editor
                     break;
                 case RoomKind.OfficeB:
                     Desk(root, new Vector3(-32f, 0f, 15f), 0f);
-                    Desk(root, new Vector3(-32f, 0f, 22f), 0f);
+                    // two rows of desks in the open-plan part (the back rooms start at z 22)
+                    Desk(root, new Vector3(-32f, 0f, 18.6f), 0f);
                     Desk(root, new Vector3(-24f, 0f, 15f), 0f);
+                    Desk(root, new Vector3(-24f, 0f, 18.6f), 0f);
                     Chair(root, new Vector3(-32f, 0f, 14.1f), 0f);
                     Chair(root, new Vector3(-24f, 0f, 14.1f), 0f);
+                    Chair(root, new Vector3(-32f, 0f, 17.7f), 0f);
+                    Chair(root, new Vector3(-24f, 0f, 17.7f), 0f);
                     for (var i = 0; i < 4; i++) Locker(root, new Vector3(-35.4f, 0f, 18f + i * 0.7f), 90f);
                     break;
                 case RoomKind.CorridorN:
@@ -286,6 +298,10 @@ namespace CoOpHorror.Editor
                         for (var i = 0; i < 4; i++) ServerRack(root, new Vector3(2.5f + i * 1.1f, 0f, z));
                         for (var i = 0; i < 4; i++) ServerRack(root, new Vector3(11.8f + i * 1.1f, 0f, z));
                     }
+                    // a third row through the middle, with a gap in the centre: the racks make a small maze like
+                    // the server rooms of both games (clear of the west and east doorways at z 19)
+                    for (var i = 0; i < 3; i++) ServerRack(root, new Vector3(4.4f + i * 1.1f, 0f, 19f));
+                    for (var i = 0; i < 3; i++) ServerRack(root, new Vector3(11.4f + i * 1.1f, 0f, 19f));
                     break;
                 case RoomKind.TransmitterRoom:
                     Stripe(root, new Vector3(32f, 0.01f, 20.8f), new Vector3(7f, 0.02f, 0.3f));   // hazard edge around the lift shaft

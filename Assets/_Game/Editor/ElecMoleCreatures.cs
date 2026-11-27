@@ -37,7 +37,7 @@ namespace CoOpHorror.Editor
             DisguiseAsDeskFan(fan, FanCrawlerYaw);
         }
 
-        private static readonly Vector3 FanCrawlerTable = new(-31f, 0f, -9.3f); // dorm, against the south wall (clear of the beds)
+        private static readonly Vector3 FanCrawlerTable = new(-28.5f, 0f, -9.3f); // dorm living room, against the south wall beside the TV corner
         private const float FanCrawlerYaw = 0f;                                   // facing into the room (north)
 
         // The battery a creature drops when its power is drained to nothing (hidden until then; drink only).
@@ -62,7 +62,7 @@ namespace CoOpHorror.Editor
         // The look of the appliance fan (BuildFan) on the creature, shown while it is disguised.
         private static void DisguiseAsDeskFan(TempMonster fan, float yaw)
         {
-            const float scale = 0.55f; // same size as the real fan on its side table
+            const float scale = DeskFanScale; // same size as the real desk fan
             var root = fan.transform;
             root.rotation = Quaternion.Euler(0f, yaw, 0f);
             var disguise = new GameObject("Disguise").transform;
@@ -220,6 +220,10 @@ namespace CoOpHorror.Editor
         private static void BuildClockSpider(Vector3 position, Vector3[] route)
         {
             var (root, visual) = CreatureRoot("Creature_ClockSpider", position, 0.55f, 1.3f);
+            // it crawls over walls and ceilings (TempMonster.Climb): full rotation, as quaternions
+            var spiderSync = root.GetComponent<NetworkTransform>();
+            spiderSync.SyncRotAngleX = spiderSync.SyncRotAngleZ = true;
+            spiderSync.UseQuaternionSynchronization = true;
             // Tripo model from the concept image, rigged in Blender (cfg_clockspider.py): four fleshy legs
             // trotting in diagonal pairs.
             if (SpawnCharacter(visual, "ClockSpider", Color.white, root.transform, out var rig) != null)

@@ -1,0 +1,4 @@
+Poly Haven (https://polyhaven.com) - all assets are CC0 1.0 Universal (public domain).
+https://polyhaven.com/license
+Models here were converted to low-poly FBX with 128 px base-colour textures by tools/blender/polyhaven_to_prop.py.
+Originals (1k glTF) are kept outside the repository in C:\Users\user\GameAssets\CC0\polyhaven.

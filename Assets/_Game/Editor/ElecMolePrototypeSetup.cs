@@ -268,20 +268,23 @@ namespace CoOpHorror.Editor
             BuildTransmitter(Ship.Transmitter, 180f);
 
             // name, text key, watts it holds (every nose drinks at the same flat rate).
-            // appliances stand on furniture (a dresser, side tables, a kitchen cabinet), never on the bare floor;
-            // the microwave, toaster and kettle are already on the break room counter
-            BuildAppliance("TV", "appliance.tv", 120, OnStand("TV", new Vector3(-30f, 0f, 6f), 90f, "QuaterniusHouse/Drawer_3", new Vector3(0.95f, 0.62f, 0.52f)), 90f, Mat("ApplianceDark", new Color(0.12f, 0.12f, 0.13f)),
+            // Every appliance sits where it is really used (Docs/MapReference/README.md): the TV on a low TV cabinet
+            // against the dorm wall with the sofa facing it, the radio on top of a low bookcase against the office
+            // wall, the desk fan on an office desk next to the monitor, and the kitchen things (microwave, toaster,
+            // kettle, rice cooker) side by side on the break room counter. Nothing stands alone in a corridor.
+            // Stands: Kenney models face local -Z, so the stand turns half round from the appliance (front +Z).
+            BuildAppliance("TV", "appliance.tv", 120, OnStand("TV", DormTvStand, 180f, "KenneyFurniture/cabinetTelevision", new Vector3(1.6f, 0.5f, 0.5f)), 0f, Mat("ApplianceDark", new Color(0.12f, 0.12f, 0.13f)),
                 new Vector3(0f, 0.3f, 0f), new Vector3(0.75f, 0.55f, 0.45f), new Vector3(0f, 0.31f, 0.231f), new Vector3(0.6f, 0.42f, 0.02f));
             BuildAppliance("Microwave", "appliance.microwave", 1000, new Vector3(14.2f, 0.95f, 9.15f), 180f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
                 new Vector3(0f, 0.17f, 0f), new Vector3(0.55f, 0.34f, 0.4f), new Vector3(-0.06f, 0.17f, 0.205f), new Vector3(0.32f, 0.22f, 0.02f));
-            BuildAppliance("Radio", "appliance.radio", 30, OnStand("Radio", new Vector3(-22f, 0f, 25f), 180f, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f)), 180f, Mat("ApplianceWood", new Color(0.42f, 0.27f, 0.15f)),
+            BuildAppliance("Radio", "appliance.radio", 30, OnStand("Radio", OfficeRadioShelf, 0f, "KenneyFurniture/bookcaseOpenLow", new Vector3(0.95f, 0.95f, 0.55f)), 180f, Mat("ApplianceWood", new Color(0.42f, 0.27f, 0.15f)),
                 new Vector3(0f, 0.13f, 0f), new Vector3(0.45f, 0.26f, 0.15f), new Vector3(0f, 0.2f, 0.08f), new Vector3(0.35f, 0.06f, 0.02f));
-            BuildFan(OnStand("Fan", new Vector3(-9f, 0f, 6f), 180f, "KenneyFurniture/sideTableDrawers", new Vector3(0.55f, 0.62f, 0.45f)), 180f, 0.55f); // a desk fan on a side table
+            BuildFan(OfficeDeskFan, 180f, DeskFanScale); // a desk fan on the office desk, beside the monitor, blowing at the chair
             BuildAppliance("Toaster", "appliance.toaster", 800, new Vector3(12.2f, 0.95f, 9.15f), 180f, Mat("ApplianceMetal", new Color(0.6f, 0.62f, 0.66f)),
                 new Vector3(0f, 0.11f, 0f), new Vector3(0.3f, 0.22f, 0.18f), new Vector3(0f, 0.11f, 0.095f), new Vector3(0.18f, 0.08f, 0.01f));
             BuildAppliance("Kettle", "appliance.kettle", 1500, new Vector3(16.2f, 0.95f, 9.15f), 180f, Mat("ApplianceRed", new Color(0.55f, 0.12f, 0.1f)),
                 new Vector3(0f, 0.14f, 0f), new Vector3(0.22f, 0.28f, 0.22f), new Vector3(0f, 0.2f, 0.115f), new Vector3(0.08f, 0.05f, 0.01f));
-            BuildAppliance("RiceCooker", "appliance.ricecooker", 650, OnStand("RiceCooker", new Vector3(12f, 0f, -19.6f), 0f, "KenneyFurniture/kitchenCabinet", new Vector3(0.7f, 0.9f, 0.6f)), 0f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
+            BuildAppliance("RiceCooker", "appliance.ricecooker", 650, BreakroomRiceCooker, 180f, Mat("ApplianceLight", new Color(0.7f, 0.7f, 0.68f)),
                 new Vector3(0f, 0.17f, 0f), new Vector3(0.38f, 0.34f, 0.38f), new Vector3(0f, 0.2f, 0.195f), new Vector3(0.16f, 0.06f, 0.01f));
 
             // CCTV cameras on room walls (root on the wall face, facing into the room) and ceiling lamps.
@@ -289,7 +292,7 @@ namespace CoOpHorror.Editor
             var lampIndex = 0;
             foreach (var room in Rooms)
                 if (room.Kind != RoomKind.Ship)
-                    foreach (var spot in LampSpots(room)) BuildLamp(++lampIndex, spot + Vector3.up * LampHeight);
+                    foreach (var spot in LampSpots(room)) BuildLamp(++lampIndex, spot + Vector3.up * LampHeight, LampColor(room.Kind));
 
             BuildCreatures();
             BuildSwingDoors();
@@ -306,6 +309,23 @@ namespace CoOpHorror.Editor
             director.ShipMax = Ship.Max;
             director.ShipDoor = door;
         }
+
+        // Every appliance a nose can drain is drawn half again as big as the real thing, so it reads from across a
+        // dark room (user request, 2026-11-28). Their spots below leave room for the bigger size.
+        private const float ApplianceScale = 1.5f;
+        // the desk fan (and the fan crawler dressed up as one) at the same enlarged size
+        private const float DeskFanScale = 0.55f * ApplianceScale;
+
+        // Appliance spots (properties, not fields: other partial files read them in their own static initialisers;
+        // kept in step with ElecMoleLayout.AppliancePositions and the furniture in ElecMoleMap).
+        // The dorm TV corner: low TV cabinet against the south wall, sofa and rug in front of it.
+        private static Vector3 DormTvStand => new(-25.5f, 0f, -9.5f);
+        // Office B: a low open bookcase against the north wall, the radio on top of it.
+        private static Vector3 OfficeRadioShelf => new(-22f, 0f, 27.5f);
+        // Office B: on the desk at (-24, 15), left of the monitor (desk tops are 1.05 m up).
+        private static Vector3 OfficeDeskFan => new(-24.7f, 1.05f, 15.35f);
+        // Break room counter (top 0.95 m): toaster 12.2, microwave 14.2, kettle 16.2, rice cooker at the end.
+        private static Vector3 BreakroomRiceCooker => new(16.95f, 0.95f, 9.15f);
 
         // Where the ship's generator crank handle ended up: on a side table in the old transmitter room.
         private static readonly Vector3 CrankPosition = new(31f, 0f, 23f);
@@ -560,7 +580,16 @@ namespace CoOpHorror.Editor
         private const float LampHeight = 2.35f;
 
         // A ceiling lamp on a cord, on from the start (noses drain it darker).
-        private static void BuildLamp(int number, Vector3 position)
+        // Warm bulbs where people lived (dorm, office, break room), cold white tubes in the corridors and plant
+        // rooms: the homes of R.E.P.O.'s manor next to the grey facility of Lethal Company.
+        private static Color LampColor(RoomKind kind) => kind switch
+        {
+            RoomKind.Dorm or RoomKind.OfficeB or RoomKind.Breakroom => new Color(1f, 0.78f, 0.5f),
+            RoomKind.Lair => new Color(1f, 0.7f, 0.45f),
+            _ => new Color(0.82f, 0.9f, 1f),
+        };
+
+        private static void BuildLamp(int number, Vector3 position, Color color)
         {
             var root = NetRoot($"Lamp_{number:00}", position, 0f);
             var metal = Mat("LampShade", new Color(0.3f, 0.32f, 0.28f));
@@ -574,7 +603,7 @@ namespace CoOpHorror.Editor
             collider.center = new Vector3(0f, 0.05f, 0f);
             collider.size = new Vector3(0.7f, 0.4f, 0.7f);
             collider.isTrigger = true; // hangs low: nothing bumps into it, the nose still finds it
-            var bulb = PointLight(root.transform, "Light", new Vector3(0f, -0.25f, 0f), new Color(1f, 0.82f, 0.55f), 11f, 13f);
+            var bulb = PointLight(root.transform, "Light", new Vector3(0f, -0.25f, 0f), color, 11f, 13f);
             var lamp = root.AddComponent<PowerLamp>();
             lamp.NameKey = "lamp.ceiling";
             lamp.Watts = 60;
@@ -743,6 +772,7 @@ namespace CoOpHorror.Editor
                     ?? SurfacePoint(root.transform, model, new Vector2((lo.x + hi.x) / 2f, (lo.y + hi.y) / 2f), hi.z)
                     ?? new Vector3((lo.x + hi.x) / 2f, (lo.y + hi.y) / 2f, hi.z);
             }
+            root.transform.localScale = Vector3.one * ApplianceScale;
             return FinishAppliance(root, nameKey, watts, indicator.GetComponent<Renderer>(), bodyCenter.y * 2f);
         }
 

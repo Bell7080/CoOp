@@ -43,7 +43,7 @@ namespace CoOpHorror.Editor
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
                 if (AssetImporter.GetAtPath(path) is not TextureImporter importer) continue;
-                var maxSize = path.Contains("Quaternius") || path.Contains("/Art/Props/") ? 128 : 64;
+                var maxSize = path.Contains("Quaternius") || path.Contains("PolyHaven") || path.Contains("/Art/Props/") ? 128 : 64;
                 if (importer.filterMode == FilterMode.Point && importer.maxTextureSize == maxSize && !importer.mipmapEnabled) continue;
                 importer.filterMode = FilterMode.Point;
                 importer.maxTextureSize = maxSize;
@@ -216,8 +216,12 @@ namespace CoOpHorror.Editor
             Clutter(root, "QuaterniusHouse/Trashcan_Large", new Vector3(16.8f, 0f, -8.6f), 0f, 1.05f);
             Clutter(root, "QuaterniusZombie/TrashBag_1", new Vector3(15.9f, 0f, -9.2f), 30f, 0.65f, false);
             Clutter(root, "QuaterniusZombie/TrashBag_2", new Vector3(16.9f, 0f, -7.6f), 80f, 0.6f, false);
+            // (no extra TV on the kitchen counter any more: the counter holds the real kitchen appliances, the
+            // TV lives in the dorm TV corner)
             Clutter(root, "KenneyFurniture/radio", new Vector3(5.3f, 1.05f, -4f), 160f, 0.24f, false);
-            Clutter(root, "KenneyFurniture/televisionVintage", new Vector3(16.6f, 0.95f, 9.2f), 180f, 0.5f, false);
+            // break room: wall cupboards over the counter, as in every office pantry (decor only, no collider)
+            for (var i = 0; i < 6; i++)
+                if (i != 2) Clutter(root, "KenneyFurniture/kitchenCabinetUpper", new Vector3(11.55f + i * 1.1f, 1.7f, 9.5f), 0f, 0.75f, false);
             // south hall: a coned-off hazard strip
             for (var k = 0; k < 4; k++)
                 Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(-12f + k * 1.6f, 0f, -20.4f), k * 25f, 0.95f, false);
@@ -235,7 +239,7 @@ namespace CoOpHorror.Editor
             Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-1f, 0f, 8.5f), 0f, 1.1f);
             Clutter(root, "KenneyFurniture/coatRackStanding", new Vector3(-17f, 0f, -8.5f), 0f, 1.9f);
             Clutter(root, "KenneyFurniture/trashcan", new Vector3(-12.6f, 0f, -5.9f), 0f, 0.5f, false);
-            Clutter(root, "KenneyFurniture/bookcaseClosedWide", new Vector3(-27f, 0f, 27.3f), 180f, 2.1f);
+            Clutter(root, "KenneyFurniture/bookcaseClosedWide", new Vector3(-31f, 0f, 27.3f), 0f, 2.1f); // office B filing room; Kenney front is -Z: faces the room
             Clutter(root, "QuaterniusHouse/Houseplant_4", new Vector3(-35f, 0f, 11f), 0f, 1.1f);
             // east warehouse: a traffic post at the loading lane
             Clutter(root, "KenneyFactory/warning-traffic", new Vector3(19.5f, 0f, -8.5f), 0f, 1.3f);
@@ -249,6 +253,8 @@ namespace CoOpHorror.Editor
             Clutter(root, "QuaterniusZombie/Pipes", new Vector3(35f, 0f, 15f), 0f, 0.7f);
             // then fill what is still bare along the walls of every room and corridor
             DressEmptyRooms(root);
+            // then the walls (pictures, clocks, fire extinguishers, power boxes), corridor ceilings and desk tops
+            DressWallsAndDesks(root);
         }
     }
 }
