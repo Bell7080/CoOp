@@ -116,6 +116,13 @@ namespace CoOpHorror.Gameplay
             agent = GetComponent<NavMeshAgent>();
             agent.enabled = false; // host enables it after the spawn teleport
             sync = GetComponent<NetworkTransform>();
+            // The clock spider crawls over walls and ceilings: replicate its full rotation (as quaternions, so
+            // hanging upside down interpolates cleanly). Scenes built before this set only the yaw.
+            if (Kind == CreatureKind.ClockSpider && sync != null)
+            {
+                sync.SyncRotAngleX = sync.SyncRotAngleZ = true;
+                sync.UseQuaternionSynchronization = true;
+            }
             body = GetComponent<CapsuleCollider>();
             if (body != null) { bodyRadius = body.radius; bodyHeight = body.height; bodyCenter = body.center; }
             homePosition = transform.position;
@@ -158,6 +165,7 @@ namespace CoOpHorror.Gameplay
         {
             if (!IsServer || !IsSpawned) return;
             if (Mode.Value == CreatureMode.Latched) ServerRelease(false, Vector3.zero);
+            ServerResetSurface();
             if (!agent.enabled)
             {
                 if (Mode.Value == CreatureMode.Disguised) ServerWake(false); // (drops it to the floor first)
@@ -217,6 +225,7 @@ namespace CoOpHorror.Gameplay
                 agent.enabled = true;
                 agent.Warp(homePosition);
             }
+            if (ServerTickClimbing()) return; // (spider) a wall route, the drop from the ceiling, or a fall
             if (Mode.Value == CreatureMode.Dead) return;
             if (Mode.Value == CreatureMode.Latched)
             {
@@ -277,7 +286,7 @@ namespace CoOpHorror.Gameplay
             if (target != null)
             {
                 var gap = (target.transform.position - transform.position).magnitude;
-                if (!Lunging && Time.time >= nextLunge && Time.time - lastSeenTime < 0.3f && gap < LungeRange) ServerStartLunge();
+                if (!Lunging && !OffFloor && Time.time >= nextLunge && Time.time - lastSeenTime < 0.3f && gap < LungeRange) ServerStartLunge();
                 if (windupUntil > 0f) return; // (TV) winding up from the next frame on
                 agent.speed = Lunging ? LungeSpeed : ChaseSpeed;
                 MoveTo(Time.time - lastSeenTime < 0.3f ? target.transform.position : lastSeenPosition);
@@ -289,7 +298,7 @@ namespace CoOpHorror.Gameplay
                 if (Arrived(1.5f))
                 {
                     if (lingerUntil <= 0f) lingerUntil = Time.time + LingerAtNoise;
-                    transform.Rotate(0f, 90f * Time.deltaTime, 0f);
+                    transform.Rotate(0f, 90f * Time.deltaTime, 0f); // (about its own up: also hanging from a ceiling)
                     if (Time.time >= lingerUntil) investigating = false;
                 }
             }
@@ -306,6 +315,7 @@ namespace CoOpHorror.Gameplay
 
             if (Mode.Value == CreatureMode.Active) TryAttack();
             ServerAfterMove();
+            ServerSpiderThink();
         }
 
         private void MoveTo(Vector3 goal)
@@ -325,7 +335,7 @@ namespace CoOpHorror.Gameplay
         {
             var direction = Flat(point - transform.position);
             if (direction.sqrMagnitude > 0.01f)
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction), degreesPerSecond * Time.deltaTime);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, Quaternion.LookRotation(direction, SurfaceUp), degreesPerSecond * Time.deltaTime);
         }
 
         // Host: stop where it stands (stunned, asleep, disguised, ringing, winding up).
@@ -349,7 +359,8 @@ namespace CoOpHorror.Gameplay
             hidden = false;
             PlayerHealth best = null;
             var bestDistance = SightRange * SightRange;
-            var eye = transform.position + Vector3.up * EyeHeight;
+            var eye = transform.position + transform.up * EyeHeight; // (below it when it hangs from the ceiling)
+            var facing = Flat(transform.forward);
             foreach (var p in PlayerHealth.All)
             {
                 if (p == null || !p.IsSpawned || p.IsDead.Value) continue;
@@ -383,7 +394,7 @@ namespace CoOpHorror.Gameplay
                     continue;
                 }
                 var flat = Flat(look - transform.position);
-                var inCone = flat.sqrMagnitude < 0.01f || Vector3.Angle(transform.forward, flat) <= senses.ViewHalfAngle;
+                var inCone = flat.sqrMagnitude < 0.01f || facing.sqrMagnitude < 0.05f || Vector3.Angle(facing, flat) <= senses.ViewHalfAngle;
                 if (!near && !inCone)
                 {
                     if (!isTarget) continue;                    // not looking that way
@@ -401,6 +412,7 @@ namespace CoOpHorror.Gameplay
         {
             if (Kind == CreatureKind.TvWalker && Lunging) { ServerChargeHits(); return; }
             if (!Chasing.Value || Recognizing.Value) return;
+            if (OffFloor) return; // (spider) up there it drops on them instead (TempMonster.Climb)
             if (Time.time < nextAttack) return;
             foreach (var p in PlayerHealth.All)
             {

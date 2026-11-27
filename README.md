@@ -1,6 +1,6 @@
 # CoOpHorror / CoOp
 
-**현재 게임 버전: 0.10.0** · Unity **6.3 LTS `6000.3.29f1`** · **Universal 3D / URP** · Windows PC
+**현재 게임 버전: 0.11.0** · Unity **6.3 LTS `6000.3.29f1`** · **Universal 3D / URP** · Windows PC
 
 친구와 함께 만드는 2~6인 협동 공포 게임의 초기 개발 프로젝트다. 권장 최소 인원은 2명, 접속 상한은 방장 포함 6명이다. 게임 이름은 **ElecMole**(전기 두더지)이다. 지금 들어 있는 것은 **인터넷 연결·동기화 샌드박스**와, 발전기→공용 전기→가전 충전→송신구 정산→암전→우주선 탈출을 해 볼 수 있는 **ElecMole 코어 루프 프로토타입**이다. 기획 요약은 [GAME_DESIGN.md](Docs/GAME_DESIGN.md)에 있다.
 
