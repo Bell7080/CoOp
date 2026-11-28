@@ -219,9 +219,10 @@ namespace CoOpHorror.Editor
             // (no extra TV on the kitchen counter any more: the counter holds the real kitchen appliances, the
             // TV lives in the dorm TV corner)
             Clutter(root, "KenneyFurniture/radio", new Vector3(5.3f, 1.05f, -4f), 160f, 0.24f, false);
-            // break room: wall cupboards over the counter, as in every office pantry (decor only, no collider)
+            // break room: wall cupboards over the counter, as in every office pantry. Real ones you open with your
+            // nose (ElecMoleOpenables; our front is +Z, so they turn round to face the room), backs on the wall.
             for (var i = 0; i < 6; i++)
-                if (i != 2) Clutter(root, "KenneyFurniture/kitchenCabinetUpper", new Vector3(11.55f + i * 1.1f, 1.7f, 9.5f), 0f, 0.75f, false);
+                if (i != 2) QueueOpenable(root, OpenableKind.WallCupboard, new Vector3(11.55f + i * 1.1f, 1.7f, 9.6f - 0.19f), 180f);
             // south hall: a coned-off hazard strip
             for (var k = 0; k < 4; k++)
                 Clutter(root, "QuaterniusZombie/TrafficCone_1", new Vector3(-12f + k * 1.6f, 0f, -20.4f), k * 25f, 0.95f, false);

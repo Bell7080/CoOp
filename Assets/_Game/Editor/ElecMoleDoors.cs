@@ -31,11 +31,13 @@ namespace CoOpHorror.Editor
         private static void BuildSwingDoors()
         {
             for (var i = 0; i < SwingDoors.Length; i++) BuildSwingDoor(i, SwingDoors[i]);
-            // Wardrobes (jangnong): step in, click the door shut, and nothing outside can see you.
+            // Wardrobes (jangnong): step in, drag the door shut with your nose, and nothing outside can see you.
             BuildWardrobe(0, new Vector3(-24.6f, 0f, 9.06f), 180f);
             BuildWardrobe(1, new Vector3(-21.2f, 0f, 9.06f), 180f);
             BuildWardrobe(2, new Vector3(-20.2f, 0f, 27.06f), 180f);
             BuildWardrobe(3, new Vector3(18.94f, 0f, 25f), 90f); // transmitter room, west wall
+            // Lockers, cupboards and drawers the map queued while furnishing (ElecMoleOpenables).
+            BuildQueuedOpenables();
         }
 
         // A walk-in wardrobe: three walls and a roof (carved out of monster paths) and one outward door.

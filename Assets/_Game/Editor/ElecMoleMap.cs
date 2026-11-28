@@ -82,6 +82,7 @@ namespace CoOpHorror.Editor
         private static Transform BuildMap(out Light[] emergencyLights)
         {
             PlanLayout();
+            PendingOpenables.Clear();
             var map = new GameObject(Prefix + "Map").transform;
             var ceilings = new GameObject(Prefix + "Ceilings").transform;
             var emergency = new List<Light>();
@@ -404,12 +405,8 @@ namespace CoOpHorror.Editor
             Dressed(root, "KenneyFurniture/bench", Vector3.zero, new Vector3(2.5f, 0.55f, 0.5f));
         }
 
-        private static void Locker(Transform parent, Vector3 position, float yaw)
-        {
-            var root = Group(parent, "Locker", position, yaw);
-            Box(root, "Body", new Vector3(0f, 1f, 0f), new Vector3(0.62f, 2f, 0.5f), Mat("Locker", new Color(0.35f, 0.42f, 0.4f), tex: Texture("Metal"), tiling: 1f));
-            Shape(root, "Vents", PrimitiveType.Cube, new Vector3(0f, 1.7f, 0.255f), Vector3.zero, new Vector3(0.4f, 0.12f, 0.01f), Mat("GeneratorDark", new Color(0.1f, 0.1f, 0.1f)));
-        }
+        // A locker you open with your nose (ElecMoleOpenables): built after the NavMesh bake as its own NetworkObject.
+        private static void Locker(Transform parent, Vector3 position, float yaw) => QueueOpenable(parent, OpenableKind.Locker, position, yaw);
 
         // Metal shelving along X with stuff on it. The bottom shelf is too low to crawl under.
         private static void Rack(Transform parent, Vector3 position, float length)
