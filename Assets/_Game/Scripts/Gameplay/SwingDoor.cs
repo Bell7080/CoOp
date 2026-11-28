@@ -1,38 +1,54 @@
-using CoOpHorror.Localization;
 using CoOpHorror.Player;
-using Unity.Netcode;
 using UnityEngine;
 
 namespace CoOpHorror.Gameplay
 {
-    // An ordinary hinged door, single leaf or a double door. Bodies push it open just by walking into it
-    // (players and monsters alike, so a creature barges through), and a click swings it open away from you or
-    // shuts it. One-way doors only open towards +Z of the door. Host-authoritative angles; every peer animates
-    // the leaves (their colliders block players). Monsters' paths ignore the leaves: they shove them aside.
-    public sealed class SwingDoor : Interactable
+    // An ordinary hinged door, single leaf or a double door. Opened by hand the R.E.P.O. way (DragOpenable):
+    // hold the left button and the nose bites the leaf, then drag it with your view; let go and it swings on
+    // its own momentum. Bodies still push it open just by walking into it (players and monsters alike, so a
+    // creature barges through). One-way doors only open towards +Z of the door. Host-authoritative angles;
+    // every peer animates the leaves (their colliders block players). Monsters' paths ignore the leaves.
+    public sealed class SwingDoor : DragOpenable
     {
         public const float MaxAngle = 100f;
         public const float PushStrength = 140f;   // degrees per second per m/s of walking into it
-        public const float ClickSpeed = 260f;     // degrees per second when opened/closed by hand
+        public const float GustSpeed = 420f;      // degrees per second a gust flings it
 
         public Transform LeafA, LeafB;            // pivots at the hinges; leaves extend along -SideA*X / -SideB*X
         public float SideA = 1f, SideB = -1f;     // which jamb each hinge is on (+X or -X)
         public float LeafWidth = 1.5f;
         public bool OneWay;
 
-        public readonly NetworkVariable<float> AngleA = new(0f);
-        public readonly NetworkVariable<float> AngleB = new(0f);
-
         public static readonly System.Collections.Generic.List<SwingDoor> All = new();
 
         // Walk-in wardrobes (jangnong) are swing doors too, built as "Wardrobe_NN" (ElecMoleDoors).
         public const float WardrobeWidth = 1.6f, WardrobeDepth = 1.4f;
-        public bool IsWardrobe => name.StartsWith("Wardrobe_");
+        public bool IsWardrobe => name.Contains("Wardrobe_");
 
         protected override void Awake()
         {
+            // the leaves become DragOpenable parts before the base caches their rest poses
+            var parts = new System.Collections.Generic.List<DragPart> { Leaf(LeafA, SideA) };
+            if (LeafB != null) parts.Add(Leaf(LeafB, SideB));
+            Parts = parts.ToArray();
+            NameKey = IsWardrobe ? "openable.wardrobe" : "openable.door";
             base.Awake();
             All.Add(this);
+        }
+
+        private DragPart Leaf(Transform pivot, float side)
+        {
+            var open = OpenAngle(side, 1f);
+            return new DragPart
+            {
+                Pivot = pivot,
+                Kind = DragPartKind.Hinge,
+                Min = OneWay ? (open > 0f ? 0f : -MaxAngle) : -MaxAngle,
+                Max = OneWay ? (open > 0f ? MaxAngle : 0f) : MaxAngle,
+                Mass = IsWardrobe ? 1.1f : 1.6f,
+                Friction = 1.1f,
+                LatchBelow = 2f,
+            };
         }
 
         public override void OnDestroy()
@@ -53,52 +69,25 @@ namespace CoOpHorror.Gameplay
             return false;
         }
 
-        // Host: a gust (the fan crawler) blows it wide open.
+        // Host: a gust (the fan crawler) flings it open.
         public void ServerBlow(Vector3 from)
         {
             if (!IsServer || IsOpen) return;
             var away = Vector3.Dot(from - transform.position, transform.forward) > 0f ? -1f : 1f;
             if (OneWay) away = 1f;
-            targetA = OpenAngle(SideA, away);
-            targetB = OpenAngle(SideB, away);
-        }
-
-        private float targetA = float.NaN, targetB = float.NaN;
-        private float shownA, shownB;
-
-        public override InteractKind Describe(PlayerInteractor who, out string prompt)
-        {
-            prompt = GameText.Get(IsOpen ? "interact.doorSwingClose" : "interact.doorSwingOpen");
-            return InteractKind.Press;
-        }
-
-        private bool IsOpen => Mathf.Abs(AngleA.Value) > 15f || (LeafB != null && Mathf.Abs(AngleB.Value) > 15f);
-
-        public override void ServerUse(PlayerInteractor who)
-        {
-            Noise.Emit(transform.position + Vector3.up, Noise.SwingDoorRadius, NoiseKind.Door);
-            if (IsOpen) { targetA = 0f; targetB = 0f; return; }
-            // swing away from whoever opened it
-            var away = Vector3.Dot(who.transform.position - transform.position, transform.forward) > 0f ? -1f : 1f;
-            if (OneWay) away = 1f;
-            targetA = OpenAngle(SideA, away);
-            targetB = OpenAngle(SideB, away);
+            ServerKick(0, Mathf.Sign(OpenAngle(SideA, away)) * GustSpeed);
+            if (LeafB != null) ServerKick(1, Mathf.Sign(OpenAngle(SideB, away)) * GustSpeed);
         }
 
         // Rotating a leaf by +angle about Y turns its free end towards +Z for a hinge on +X (towards -Z for -X).
-        private float OpenAngle(float side, float towardsZ) => side * towardsZ * 90f;
+        private static float OpenAngle(float side, float towardsZ) => side * towardsZ * 90f;
 
-        private void FixedUpdate()
+        // Host: bodies walking into a leaf shove it (degrees per second), or NaN.
+        protected override float ServerShove(int part)
         {
-            if (!IsServer || !IsSpawned) return;
-            var dt = Time.fixedDeltaTime;
-            AngleA.Value = Step(LeafA, SideA, AngleA.Value, ref targetA, dt);
-            if (LeafB != null) AngleB.Value = Step(LeafB, SideB, AngleB.Value, ref targetB, dt);
-        }
-
-        private float Step(Transform leaf, float side, float angle, ref float target, float dt)
-        {
-            if (leaf == null) return angle;
+            var leaf = part == 0 ? LeafA : LeafB;
+            var side = part == 0 ? SideA : SideB;
+            if (leaf == null) return float.NaN;
             var hinge = leaf.position;
             var along = leaf.rotation * new Vector3(-side, 0f, 0f);           // hinge -> free end
             var normal = Vector3.Cross(Vector3.up, along).normalized;
@@ -117,38 +106,12 @@ namespace CoOpHorror.Gameplay
                 push += -Mathf.Sign(n) * shove * PushStrength / Mathf.Max(0.5f, s + 0.3f);
             }
             foreach (var p in PlayerHealth.All)
-                if (p != null && p.IsSpawned && !p.IsDead.Value && p.TryGetComponent<PlayerInteractor>(out var pi))
+                if (p != null && p.IsSpawned && !p.IsDead.Value && p.TryGetComponent<PlayerInteractor>(out var pi) && !GrabbedBy(pi))
                     Pusher(p.transform.position + Vector3.down * 0.5f, pi.MotionVelocity);
             foreach (var m in TempMonster.All)
                 if (m != null && m.IsSpawned && m.TryGetComponent<UnityEngine.AI.NavMeshAgent>(out var agent))
                     Pusher(m.transform.position, agent.velocity * 1.6f + (agent.velocity.sqrMagnitude > 0.1f ? agent.velocity.normalized : Vector3.zero));
-
-            if (Mathf.Abs(push) > 0.01f)
-            {
-                target = float.NaN; // bodies win over a click in progress
-                // a positive leaf rotation (about +Y) moves the free end along +normal
-                angle += push * dt;
-            }
-            else if (!float.IsNaN(target))
-            {
-                angle = Mathf.MoveTowards(angle, target, ClickSpeed * dt);
-                if (Mathf.Approximately(angle, target)) target = float.NaN;
-            }
-            if (OneWay)
-            {
-                var open = OpenAngle(side, 1f);
-                angle = open > 0f ? Mathf.Clamp(angle, 0f, MaxAngle) : Mathf.Clamp(angle, -MaxAngle, 0f);
-            }
-            return Mathf.Clamp(angle, -MaxAngle, MaxAngle);
-        }
-
-        private void Update()
-        {
-            var k = 1f - Mathf.Exp(-14f * Time.deltaTime);
-            shownA = Mathf.Lerp(shownA, IsSpawned ? AngleA.Value : 0f, k);
-            shownB = Mathf.Lerp(shownB, IsSpawned ? AngleB.Value : 0f, k);
-            if (LeafA != null) LeafA.localRotation = Quaternion.Euler(0f, shownA, 0f);
-            if (LeafB != null) LeafB.localRotation = Quaternion.Euler(0f, shownB, 0f);
+            return Mathf.Abs(push) > 0.01f ? push : float.NaN;
         }
     }
 }

@@ -10,3 +10,4 @@
 - `Art/Characters/ClockSpider_Handmade~/`: Tripo 모델로 바꾸기 전에 Blender로 직접 만든 다리 8개짜리 시계 거미(FBX, 텍스처, .blend). 만든 스크립트는 `RemovedScripts~/tools/blender/`(make_clockspider.py, paint_clockspider.py, cfg_clockspider_handmade.py). 폴더 이름이 `~`로 끝나 Unity가 가져오지 않습니다.
 - `ThirdParty/KenneyFurniture/televisionVintage.fbx`: 탕비실 조리대 위에 장식으로 두던 브라운관 TV(가전이 아닌 가짜 전자제품). TV는 숙소 TV 코너의 진짜 가전만 남겨서 빠졌습니다 (2026-11-28).
 - `KrRiceCooker_beforeHoleFill.fbx~`: 옆·뒷면이 뚫려 있던 밥솥 원본 모델. `tools/blender/fill_prop_holes.py`로 구멍을 메운 버전이 원래 자리에 있습니다. 이름이 `~`로 끝나 Unity가 가져오지 않습니다.
+- `ThirdParty/KenneyFurniture/kitchenCabinetUpper.fbx`: 탕비실 조리대 위 벽 찬장 장식(한 덩어리 모델이라 문이 안 열림). 코로 끌어 여는 진짜 벽 찬장(`ElecMoleOpenables`)으로 바뀌어 빠졌습니다 (2026-11-28).
